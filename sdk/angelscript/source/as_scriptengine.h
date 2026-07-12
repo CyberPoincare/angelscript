@@ -152,6 +152,11 @@ public:
 	virtual int              DiscardModule(const char *module);
 	virtual asUINT           GetModuleCount() const;
 	virtual asIScriptModule *GetModuleByIndex(asUINT index) const;
+	virtual int              AddModuleToClassPath(const char *module);
+	virtual int              RemoveModuleFromClassPath(const char *module);
+	virtual void             ClearModuleClassPath();
+	virtual int              SetClassPathSymbolModule(const char *symbol, const char *module);
+	virtual void             ClearClassPathSymbolModules();
 
 	// Script functions
 	virtual int                GetLastFunctionId() const;
@@ -326,6 +331,7 @@ public:
 	// Namespace management
 	asSNameSpace *AddNameSpace(const char *name);
 	asSNameSpace *FindNameSpace(const char *name) const;
+	bool GetClassPathSymbolModule(const char *symbol, const asSNameSpace *nameSpace, asCModule **module) const;
 	asSNameSpace *GetParentNameSpace(asSNameSpace *ns) const;
 
 //===========================================================
@@ -391,6 +397,12 @@ public:
 	// Synchronized with engineRWLock
 	// This array holds all live script modules
 	asCArray<asCModule *>  scriptModules;
+	// Module name index used by the class-path bytecode loader.
+	asCMap<asCString, asCModule *> scriptModulesByName;
+	// Modules visible as the parent script class path during compilation.
+	asCArray<asCModule *>  classPathModules;
+	// Per-compilation Java import resolution. A null module intentionally blocks an ambiguous short symbol.
+	asCMap<asCString, asCModule *> classPathSymbolModules;
 	// Synchronized with engineRWLock
 	// This is a pointer to the last module that was requested. It is used for performance
 	// improvement, since it is common that the same module is accessed many times in a row

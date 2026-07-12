@@ -115,6 +115,19 @@ void asCModule::Discard()
 	ACQUIREEXCLUSIVE(engine->engineRWLock);
 	if( engine->lastModule == this )
 		engine->lastModule = 0;
+	asSMapNode<asCString, asCModule *> *moduleCursor = 0;
+	if( engine->scriptModulesByName.MoveTo(&moduleCursor, m_name) && moduleCursor->value == this )
+	{
+		engine->scriptModulesByName.Erase(moduleCursor);
+		for( asUINT i = 0; i < engine->scriptModules.GetLength(); i++ )
+			if( engine->scriptModules[i] != this && engine->scriptModules[i]->m_name == m_name )
+			{
+				engine->scriptModulesByName.Insert(m_name, engine->scriptModules[i]);
+				break;
+			}
+	}
+	engine->classPathSymbolModules.EraseAll();
+	engine->classPathModules.RemoveValue(this);
 	engine->scriptModules.RemoveValue(this);
 	engine->discardedModules.PushLast(this);
 	RELEASEEXCLUSIVE(engine->engineRWLock);
@@ -196,7 +209,23 @@ asIScriptEngine *asCModule::GetEngine() const
 // interface
 void asCModule::SetName(const char *in_name)
 {
-	m_name = in_name;
+	asCString newName(in_name ? in_name : "");
+	ACQUIREEXCLUSIVE(m_engine->engineRWLock);
+	asSMapNode<asCString, asCModule *> *cursor = 0;
+	if( m_engine->scriptModulesByName.MoveTo(&cursor, m_name) && cursor->value == this )
+	{
+		m_engine->scriptModulesByName.Erase(cursor);
+		for( asUINT i = 0; i < m_engine->scriptModules.GetLength(); i++ )
+			if( m_engine->scriptModules[i] != this && m_engine->scriptModules[i]->m_name == m_name )
+			{
+				m_engine->scriptModulesByName.Insert(m_name, m_engine->scriptModules[i]);
+				break;
+			}
+	}
+	m_name = newName;
+	if( !m_engine->scriptModulesByName.MoveTo(&cursor, m_name) )
+		m_engine->scriptModulesByName.Insert(m_name, this);
+	RELEASEEXCLUSIVE(m_engine->engineRWLock);
 }
 
 // interface
@@ -1859,4 +1888,3 @@ asDWORD asCModule::SetAccessMask(asDWORD mask)
 }
 
 END_AS_NAMESPACE
-

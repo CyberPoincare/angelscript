@@ -72,6 +72,7 @@ protected:
 	void               ReadObjectProperty(asCObjectType *ot);
 	void               ReadDataType(asCDataType *dt);
 	asCTypeInfo       *ReadTypeInfo();
+	asCScriptFunction *FindFunctionInModule(const asCScriptFunction &func, asCObjectType *parentClass, asCModule *searchModule);
 	void               ReadTypeDeclaration(asCTypeInfo *ot, int phase, bool *isExternal = 0);
 	void               ReadByteCode(asCScriptFunction *func);
 	asWORD             ReadEncodedUInt16();
@@ -193,6 +194,7 @@ protected:
 	int FindTypeIdIdx(int typeId);
 	int FindFunctionIndex(asCScriptFunction *func);
 	int FindGlobalPropPtrIndex(void *);
+	asCModule *FindGlobalPropertyModule(asCGlobalProperty *prop);
 	int FindStringConstantIndex(void *str);
 	int FindObjectPropIndex(short offset, int typeId, asDWORD *bc);
 

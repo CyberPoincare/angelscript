@@ -697,6 +697,9 @@ void asCReader::ReadUsedFunctions()
 
 		// Is the function from the module or the application?
 		ReadData(&c, 1);
+		asCString ownerModuleName;
+		if( c == 'm' )
+			ReadString(&ownerModuleName);
 
 		if( c == 'n' )
 		{
@@ -705,7 +708,18 @@ void asCReader::ReadUsedFunctions()
 		}
 		else
 		{
-			asCScriptFunction func(engine, c == 'm' ? module : 0, asFUNC_DUMMY);
+			asCModule *serializedOwnerModule = 0;
+			if( c == 'm' )
+			{
+				serializedOwnerModule = ownerModuleName == module->m_name ? module :
+					engine->GetModule(ownerModuleName.AddressOf(), false);
+				if( serializedOwnerModule == 0 )
+				{
+					Error(TXT_INVALID_BYTECODE_d);
+					return;
+				}
+			}
+			asCScriptFunction func(engine, serializedOwnerModule, asFUNC_DUMMY);
 			asCObjectType *parentClass = 0;
 			ReadFunctionSignature(&func, &parentClass);
 			if( error )
@@ -718,58 +732,7 @@ void asCReader::ReadUsedFunctions()
 			if( c == 'm' )
 			{
 				asASSERT(func.templateSubTypes.GetLength() == 0);
-
-				if( func.funcType == asFUNC_IMPORTED )
-				{
-					for( asUINT i = 0; i < module->m_bindInformations.GetLength(); i++ )
-					{
-						asCScriptFunction *f = module->m_bindInformations[i]->importedFunctionSignature;
-						if( func.objectType != f->objectType ||
-							func.funcType != f->funcType ||
-							func.nameSpace != f->nameSpace ||
-							!func.IsSignatureEqual(f) )
-							continue;
-
-						usedFunctions[n] = f;
-						break;
-					}
-				}
-				else if( func.funcType == asFUNC_FUNCDEF )
-				{
-					const asCArray<asCFuncdefType *> &funcs = module->m_funcDefs;
-					for( asUINT i = 0; i < funcs.GetLength(); i++ )
-					{
-						asCScriptFunction *f = funcs[i]->funcdef;
-						if( f == 0 ||
-							func.name != f->name ||
-							!func.IsSignatureExceptNameAndObjectTypeEqual(f) ||
-							funcs[i]->parentClass != parentClass )
-							continue;
-
-						asASSERT( f->objectType == 0 );
-
-						usedFunctions[n] = f;
-						break;
-					}
-				}
-				else
-				{
-					// TODO: optimize: Global functions should be searched for in module->globalFunctions
-					// TODO: optimize: funcdefs should be searched for in module->funcDefs
-					// TODO: optimize: object methods should be searched for directly in the object type
-					for( asUINT i = 0; i < module->m_scriptFunctions.GetLength(); i++ )
-					{
-						asCScriptFunction *f = module->m_scriptFunctions[i];
-						if( func.objectType != f->objectType ||
-							func.funcType != f->funcType ||
-							func.nameSpace != f->nameSpace ||
-							!func.IsSignatureEqual(f) )
-							continue;
-
-						usedFunctions[n] = f;
-						break;
-					}
-				}
+				usedFunctions[n] = FindFunctionInModule(func, parentClass, serializedOwnerModule);
 			}
 			else if (c == 's')
 			{
@@ -1044,6 +1007,46 @@ void asCReader::ReadUsedFunctions()
 			}
 		}
 	}
+}
+
+asCScriptFunction *asCReader::FindFunctionInModule(const asCScriptFunction &func, asCObjectType *parentClass, asCModule *searchModule)
+{
+	if( searchModule == 0 )
+		return 0;
+
+	if( func.funcType == asFUNC_IMPORTED )
+	{
+		for( asUINT i = 0; i < searchModule->m_bindInformations.GetLength(); i++ )
+		{
+			asCScriptFunction *f = searchModule->m_bindInformations[i]->importedFunctionSignature;
+			if( f != 0 && func.objectType == f->objectType && func.funcType == f->funcType &&
+				func.nameSpace == f->nameSpace && func.IsSignatureEqual(f) )
+				return f;
+		}
+		return 0;
+	}
+
+	if( func.funcType == asFUNC_FUNCDEF )
+	{
+		const asCArray<asCFuncdefType *> &funcs = searchModule->m_funcDefs;
+		for( asUINT i = 0; i < funcs.GetLength(); i++ )
+		{
+			asCScriptFunction *f = funcs[i]->funcdef;
+			if( f != 0 && func.name == f->name && func.IsSignatureExceptNameAndObjectTypeEqual(f) &&
+				funcs[i]->parentClass == parentClass )
+				return f;
+		}
+		return 0;
+	}
+
+	for( asUINT i = 0; i < searchModule->m_scriptFunctions.GetLength(); i++ )
+	{
+		asCScriptFunction *f = searchModule->m_scriptFunctions[i];
+		if( f != 0 && func.objectType == f->objectType && func.funcType == f->funcType &&
+			func.nameSpace == f->nameSpace && func.IsSignatureEqual(f) )
+			return f;
+	}
+	return 0;
 }
 
 void asCReader::ReadFunctionSignature(asCScriptFunction *func, asCObjectType **parentClass)
@@ -2442,14 +2445,26 @@ asCTypeInfo* asCReader::ReadTypeInfo()
 		asCString typeName, ns;
 		ReadString(&typeName);
 		ReadString(&ns);
+		asCString ownerModuleName;
+		ReadString(&ownerModuleName);
 		asSNameSpace *nameSpace = engine->AddNameSpace(ns.AddressOf());
 
 		if( typeName.GetLength() && typeName != "$obj" && typeName != "$func" )
 		{
 			// Find the object type
-			ot = module->GetType(typeName.AddressOf(), nameSpace);
-			if (!ot)
+			if( ownerModuleName.GetLength() != 0 )
+			{
+				asCModule *ownerModule = ownerModuleName == module->m_name ? module :
+					engine->GetModule(ownerModuleName.AddressOf(), false);
+				if( ownerModule != 0 )
+					ot = ownerModule->GetType(typeName.AddressOf(), nameSpace);
+			}
+			else
+			{
 				ot = engine->GetRegisteredType(typeName.AddressOf(), nameSpace);
+				if (!ot)
+					ot = module->GetType(typeName.AddressOf(), nameSpace);
+			}
 
 			if( ot == 0 )
 			{
@@ -2810,13 +2825,21 @@ void asCReader::ReadUsedGlobalProps()
 		ReadString(&ns);
 		ReadDataType(&type);
 		ReadData(&moduleProp, 1);
+		asCString ownerModuleName;
+		if( moduleProp )
+			ReadString(&ownerModuleName);
 
 		asSNameSpace *nameSpace = engine->AddNameSpace(ns.AddressOf());
 
 		// Find the real property
 		asCGlobalProperty *globProp = 0;
 		if( moduleProp )
-			globProp = module->m_scriptGlobals.GetFirst(nameSpace, name);
+		{
+			asCModule *ownerModule = ownerModuleName == module->m_name ? module :
+				engine->GetModule(ownerModuleName.AddressOf(), false);
+			if( ownerModule != 0 )
+				globProp = ownerModule->m_scriptGlobals.GetFirst(nameSpace, name);
+		}
 		else
 			globProp = engine->registeredGlobalProps.GetFirst(nameSpace, name);
 
@@ -4243,6 +4266,8 @@ void asCWriter::WriteUsedFunctions()
 				c = 's';
 
 			WriteData(&c, 1);
+			if( c == 'm' )
+				WriteString(&func->module->m_name);
 			WriteFunctionSignature(func);
 		}
 		else
@@ -4885,6 +4910,10 @@ void asCWriter::WriteTypeInfo(asCTypeInfo* ti)
 			WriteData(&ch, 1);
 			WriteString(&ti->name);
 			WriteString(&ti->nameSpace->name);
+			asCString ownerModuleName;
+			if( ti->module != 0 )
+				ownerModuleName = ti->module->m_name;
+			WriteString(&ownerModuleName);
 		}
 		else
 		{
@@ -5868,6 +5897,27 @@ int asCWriter::FindGlobalPropPtrIndex(void *ptr)
 	return (int)usedGlobalProperties.GetLength()-1;
 }
 
+asCModule *asCWriter::FindGlobalPropertyModule(asCGlobalProperty *prop)
+{
+	if( prop == 0 )
+		return 0;
+
+	asCGlobalProperty *candidate = module->m_scriptGlobals.GetFirst(prop->nameSpace, prop->name);
+	if( candidate == prop )
+		return module;
+
+	for( asUINT i = engine->classPathModules.GetLength(); i-- > 0; )
+	{
+		asCModule *classPathModule = engine->classPathModules[i];
+		if( classPathModule == 0 || classPathModule == module )
+			continue;
+		candidate = classPathModule->m_scriptGlobals.GetFirst(prop->nameSpace, prop->name);
+		if( candidate == prop )
+			return classPathModule;
+	}
+	return 0;
+}
+
 void asCWriter::WriteUsedGlobalProps()
 {
 	TimeIt("asCWriter::WriteUsedGlobalProps");
@@ -5899,6 +5949,15 @@ void asCWriter::WriteUsedGlobalProps()
 		if( prop->realAddress == 0 )
 			moduleProp = 1;
 		WriteData(&moduleProp, 1);
+		if( moduleProp )
+		{
+			asCModule *ownerModule = FindGlobalPropertyModule(prop);
+			asASSERT(ownerModule);
+			asCString ownerModuleName;
+			if( ownerModule != 0 )
+				ownerModuleName = ownerModule->m_name;
+			WriteString(&ownerModuleName);
+		}
 	}
 }
 
@@ -6038,4 +6097,3 @@ int asCWriter::FindTypeInfoIdx(asCTypeInfo *obj)
 #endif // AS_NO_COMPILER
 
 END_AS_NAMESPACE
-

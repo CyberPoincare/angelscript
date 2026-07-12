@@ -1275,6 +1275,38 @@ bool asCBuilder::DoesGlobalPropertyExist(const char *prop, asSNameSpace *ns, asC
 			if( outProp ) *outProp = globProp;
 			return true;
 		}
+
+
+		asCModule *symbolModule = 0;
+		if( engine->GetClassPathSymbolModule(prop, ns, &symbolModule) )
+		{
+			if( symbolModule == 0 || symbolModule == module )
+				return false;
+			globProp = symbolModule->m_scriptGlobals.GetFirst(ns, prop);
+			if( globProp == 0 )
+				return false;
+			if( outProp ) *outProp = globProp;
+			return true;
+		}
+
+		asCGlobalProperty *classPathProperty = 0;
+		for( asUINT n = engine->classPathModules.GetLength(); n-- > 0; )
+		{
+			asCModule *classPathModule = engine->classPathModules[n];
+			if( classPathModule == 0 || classPathModule == module )
+				continue;
+			globProp = classPathModule->m_scriptGlobals.GetFirst(ns, prop);
+			if( globProp == 0 )
+				continue;
+			if( classPathProperty != 0 && classPathProperty != globProp )
+				return false;
+			classPathProperty = globProp;
+		}
+		if( classPathProperty )
+		{
+			if( outProp ) *outProp = classPathProperty;
+			return true;
+		}
 	}
 
 	return false;
@@ -5546,7 +5578,7 @@ int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file,
 	else if( objType )
 		GetObjectMethodDescriptions(name.AddressOf(), objType, funcs, false);
 	else
-		GetFunctionDescriptions(name.AddressOf(), funcs, ns);
+		GetFunctionDescriptions(name.AddressOf(), funcs, ns, false);
 	if( objType && (name == "opConv" || name == "opImplConv" || name == "opCast" || name == "opImplCast") && parameterTypes.GetLength() == 0 )
 	{
 		// opConv and opCast are special methods used for type casts
@@ -5935,7 +5967,7 @@ int asCBuilder::RegisterImportedFunction(int importID, asCScriptNode *node, asCS
 
 	// Check that the same function hasn't been registered already in the namespace
 	asCArray<int> funcs;
-	GetFunctionDescriptions(name.AddressOf(), funcs, ns);
+	GetFunctionDescriptions(name.AddressOf(), funcs, ns, false);
 	for( asUINT n = 0; n < funcs.GetLength(); ++n )
 	{
 		asCScriptFunction *func = GetFunctionDescription(funcs[n]);
@@ -5974,7 +6006,7 @@ asCScriptFunction *asCBuilder::GetFunctionDescription(int id)
 		return engine->importedFunctions[id & ~FUNC_IMPORTED]->importedFunctionSignature;
 }
 
-void asCBuilder::GetFunctionDescriptions(const char *name, asCArray<int> &funcs, asSNameSpace *ns)
+void asCBuilder::GetFunctionDescriptions(const char *name, asCArray<int> &funcs, asSNameSpace *ns, bool includeClassPath)
 {
 	asUINT n;
 
@@ -5985,6 +6017,54 @@ void asCBuilder::GetFunctionDescriptions(const char *name, asCArray<int> &funcs,
 		const asCScriptFunction *f = module->m_globalFunctions.Get(idxs[n]);
 		asASSERT( f->objectType == 0 );
 		funcs.PushLast(f->id);
+	}
+
+	if( includeClassPath && funcs.GetLength() == 0 )
+	{
+		asCModule *symbolModule = 0;
+		if( engine->GetClassPathSymbolModule(name, ns, &symbolModule) )
+		{
+			if( symbolModule != 0 && symbolModule != module )
+			{
+				const asCArray<unsigned int> &classPathIndexes = symbolModule->m_globalFunctions.GetIndexes(ns, name);
+				for( n = 0; n < classPathIndexes.GetLength(); n++ )
+				{
+					const asCScriptFunction *f = symbolModule->m_globalFunctions.Get(classPathIndexes[n]);
+					asASSERT( f->objectType == 0 );
+					funcs.PushLast(f->id);
+				}
+			}
+		}
+		else
+		{
+			asCModule *foundModule = 0;
+			asCArray<int> classPathFunctions;
+			bool ambiguous = false;
+			for( asUINT m = engine->classPathModules.GetLength(); m-- > 0; )
+			{
+				asCModule *classPathModule = engine->classPathModules[m];
+				if( classPathModule == 0 || classPathModule == module )
+					continue;
+				const asCArray<unsigned int> &classPathIndexes = classPathModule->m_globalFunctions.GetIndexes(ns, name);
+				if( classPathIndexes.GetLength() == 0 )
+					continue;
+				if( foundModule != 0 && foundModule != classPathModule )
+				{
+					ambiguous = true;
+					break;
+				}
+				foundModule = classPathModule;
+				for( n = 0; n < classPathIndexes.GetLength(); n++ )
+				{
+					const asCScriptFunction *f = classPathModule->m_globalFunctions.Get(classPathIndexes[n]);
+					asASSERT( f->objectType == 0 );
+					classPathFunctions.PushLast(f->id);
+				}
+			}
+			if( !ambiguous )
+				for( n = 0; n < classPathFunctions.GetLength(); n++ )
+					funcs.PushLast(classPathFunctions[n]);
+		}
 	}
 
 	// Add the imported functions
@@ -6988,6 +7068,25 @@ asCTypeInfo *asCBuilder::GetType(const char *type, asSNameSpace *ns, asCObjectTy
 		asCTypeInfo *ti = engine->GetRegisteredType(type, ns);
 		if (!ti && module)
 			ti = module->GetType(type, ns);
+		if (!ti && module)
+		{
+			asCModule *symbolModule = 0;
+			if( engine->GetClassPathSymbolModule(type, ns, &symbolModule) )
+				return symbolModule != 0 && symbolModule != module ? symbolModule->GetType(type, ns) : 0;
+
+			for( asUINT n = engine->classPathModules.GetLength(); n-- > 0; )
+			{
+				asCModule *classPathModule = engine->classPathModules[n];
+				if( classPathModule == 0 || classPathModule == module )
+					continue;
+				asCTypeInfo *candidate = classPathModule->GetType(type, ns);
+				if( candidate == 0 )
+					continue;
+				if( ti != 0 && ti != candidate )
+					return 0;
+				ti = candidate;
+			}
+		}
 		return ti;
 	}
 	else
@@ -7062,6 +7161,25 @@ bool asCBuilder::DoesTypeExist(const asCString &type)
 			for (n = 0; n < module->m_funcDefs.GetLength(); n++)
 				if (!knownTypes.MoveTo(0, module->m_funcDefs[n]->name))
 					knownTypes.Insert(module->m_funcDefs[n]->name, true);
+
+			for (asUINT m = engine->classPathModules.GetLength(); m-- > 0; )
+			{
+				asCModule *classPathModule = engine->classPathModules[m];
+				if (classPathModule == 0 || classPathModule == module)
+					continue;
+				for (n = 0; n < classPathModule->m_classTypes.GetLength(); n++)
+					if (!knownTypes.MoveTo(0, classPathModule->m_classTypes[n]->name))
+						knownTypes.Insert(classPathModule->m_classTypes[n]->name, true);
+				for (n = 0; n < classPathModule->m_enumTypes.GetLength(); n++)
+					if (!knownTypes.MoveTo(0, classPathModule->m_enumTypes[n]->name))
+						knownTypes.Insert(classPathModule->m_enumTypes[n]->name, true);
+				for (n = 0; n < classPathModule->m_typeDefs.GetLength(); n++)
+					if (!knownTypes.MoveTo(0, classPathModule->m_typeDefs[n]->name))
+						knownTypes.Insert(classPathModule->m_typeDefs[n]->name, true);
+				for (n = 0; n < classPathModule->m_funcDefs.GetLength(); n++)
+					if (!knownTypes.MoveTo(0, classPathModule->m_funcDefs[n]->name))
+						knownTypes.Insert(classPathModule->m_funcDefs[n]->name, true);
+			}
 		}
 	}
 
@@ -7130,6 +7248,38 @@ asCFuncdefType *asCBuilder::GetFuncDef(const char *type, asSNameSpace *ns, asCOb
 				if (funcDef && funcDef->nameSpace == ns && funcDef->name == type)
 					return funcDef;
 			}
+
+			asCModule *symbolModule = 0;
+			if( engine->GetClassPathSymbolModule(type, ns, &symbolModule) )
+			{
+				if( symbolModule == 0 || symbolModule == module )
+					return 0;
+				for (asUINT n = 0; n < symbolModule->m_funcDefs.GetLength(); n++)
+				{
+					asCFuncdefType *funcDef = symbolModule->m_funcDefs[n];
+					if (funcDef && funcDef->nameSpace == ns && funcDef->name == type)
+						return funcDef;
+				}
+				return 0;
+			}
+
+			asCFuncdefType *found = 0;
+			for (asUINT m = engine->classPathModules.GetLength(); m-- > 0; )
+			{
+				asCModule *classPathModule = engine->classPathModules[m];
+				if (classPathModule == 0 || classPathModule == module)
+					continue;
+				for (asUINT n = 0; n < classPathModule->m_funcDefs.GetLength(); n++)
+				{
+					asCFuncdefType *funcDef = classPathModule->m_funcDefs[n];
+					if (funcDef == 0 || funcDef->nameSpace != ns || funcDef->name != type)
+						continue;
+					if( found != 0 && found != funcDef )
+						return 0;
+					found = funcDef;
+				}
+			}
+			if( found ) return found;
 		}
 	}
 	else
@@ -7211,6 +7361,32 @@ int asCBuilder::GetEnumValue(const char *name, asCDataType &outDt, asINT64 &outV
 			{
 				// Found more than one value in different enum types
 				return 2;
+			}
+		}
+	}
+
+	if( !found )
+	{
+		asCModule *symbolModule = 0;
+		const bool restricted = engine->GetClassPathSymbolModule(name, ns, &symbolModule);
+		for( asUINT m = engine->classPathModules.GetLength(); m-- > 0; )
+		{
+			asCModule *classPathModule = engine->classPathModules[m];
+			if( classPathModule == 0 || classPathModule == module ||
+				(restricted && classPathModule != symbolModule) )
+				continue;
+			for( t = 0; t < classPathModule->m_enumTypes.GetLength(); t++ )
+			{
+				asCEnumType *et = classPathModule->m_enumTypes[t];
+				if( ns != et->nameSpace ) continue;
+
+				if( GetEnumValueFromType(et, name, outDt, outValue) )
+				{
+					if( !found )
+						found = true;
+					else
+						return 2;
+				}
 			}
 		}
 	}
