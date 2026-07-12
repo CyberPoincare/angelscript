@@ -1484,6 +1484,90 @@ asIScriptModule *asCScriptEngine::GetModuleByIndex(asUINT index) const
 	return mod;
 }
 
+// interface
+int asCScriptEngine::AddModuleToClassPath(const char *module)
+{
+	asCModule *mod = GetModule(module, false);
+	if( mod == 0 ) return asNO_MODULE;
+
+	ACQUIREEXCLUSIVE(engineRWLock);
+	if( !classPathModules.Exists(mod) )
+		classPathModules.PushLast(mod);
+	RELEASEEXCLUSIVE(engineRWLock);
+	return asSUCCESS;
+}
+
+// interface
+int asCScriptEngine::RemoveModuleFromClassPath(const char *module)
+{
+	asCModule *mod = GetModule(module, false);
+	if( mod == 0 ) return asNO_MODULE;
+
+	ACQUIREEXCLUSIVE(engineRWLock);
+	classPathModules.RemoveValue(mod);
+	RELEASEEXCLUSIVE(engineRWLock);
+	return asSUCCESS;
+}
+
+// interface
+void asCScriptEngine::ClearModuleClassPath()
+{
+	ACQUIREEXCLUSIVE(engineRWLock);
+	classPathModules.SetLength(0);
+	RELEASEEXCLUSIVE(engineRWLock);
+}
+
+// interface
+int asCScriptEngine::SetClassPathSymbolModule(const char *symbol, const char *module)
+{
+	if( symbol == 0 || symbol[0] == '\0' ) return asINVALID_ARG;
+
+	asCModule *mod = 0;
+	if( module != 0 && module[0] != '\0' )
+	{
+		mod = GetModule(module, false);
+		if( mod == 0 ) return asNO_MODULE;
+	}
+
+	asCString key(symbol);
+	if( key.SubString(0, 2) == "::" )
+		key = key.SubString(2);
+
+	ACQUIREEXCLUSIVE(engineRWLock);
+	asSMapNode<asCString, asCModule *> *cursor = 0;
+	if( classPathSymbolModules.MoveTo(&cursor, key) )
+		cursor->value = mod;
+	else
+		classPathSymbolModules.Insert(key, mod);
+	RELEASEEXCLUSIVE(engineRWLock);
+	return asSUCCESS;
+}
+
+// interface
+void asCScriptEngine::ClearClassPathSymbolModules()
+{
+	ACQUIREEXCLUSIVE(engineRWLock);
+	classPathSymbolModules.EraseAll();
+	RELEASEEXCLUSIVE(engineRWLock);
+}
+
+// internal
+bool asCScriptEngine::GetClassPathSymbolModule(const char *symbol, const asSNameSpace *nameSpace, asCModule **module) const
+{
+	if( module ) *module = 0;
+	if( symbol == 0 || symbol[0] == '\0' ) return false;
+
+	asCString key;
+	if( nameSpace != 0 && nameSpace->name.GetLength() != 0 )
+		key = nameSpace->name + "::";
+	key += symbol;
+
+	asSMapNode<asCString, asCModule *> *cursor = 0;
+	if( !classPathSymbolModules.MoveTo(&cursor, key) ) return false;
+	if( module ) *module = cursor->value;
+	return true;
+}
+
 // internal
 int asCScriptEngine::GetFactoryIdByDecl(const asCObjectType *ot, const char *decl)
 {
@@ -3580,19 +3664,16 @@ asCModule *asCScriptEngine::GetModule(const char *name, bool create)
 	if( name == 0 ) name = "";
 
 	asCModule *retModule = 0;
+	asCString moduleName(name);
 
 	ACQUIRESHARED(engineRWLock);
 	if( lastModule && lastModule->m_name == name )
 		retModule = lastModule;
 	else
 	{
-		// TODO: optimize: Improve linear search
-		for( asUINT n = 0; n < scriptModules.GetLength(); ++n )
-			if( scriptModules[n] && scriptModules[n]->m_name == name )
-			{
-				retModule = scriptModules[n];
-				break;
-			}
+		asSMapNode<asCString, asCModule *> *cursor = 0;
+		if( scriptModulesByName.MoveTo(&cursor, moduleName) )
+			retModule = cursor->value;
 	}
 	RELEASESHARED(engineRWLock);
 
@@ -3616,6 +3697,7 @@ asCModule *asCScriptEngine::GetModule(const char *name, bool create)
 
 		ACQUIREEXCLUSIVE(engineRWLock);
 		scriptModules.PushLast(retModule);
+		scriptModulesByName.Insert(retModule->m_name, retModule);
 		lastModule = retModule;
 		RELEASEEXCLUSIVE(engineRWLock);
 	}
@@ -7052,4 +7134,3 @@ asSNameSpace *asCScriptEngine::GetParentNameSpace(asSNameSpace *ns) const
 }
 
 END_AS_NAMESPACE
-

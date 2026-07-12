@@ -751,6 +751,11 @@ public:
 	virtual int              DiscardModule(const char *module) = 0;
 	virtual asUINT           GetModuleCount() const = 0;
 	virtual asIScriptModule *GetModuleByIndex(asUINT index) const = 0;
+	virtual int              AddModuleToClassPath(const char *module) = 0;
+	virtual int              RemoveModuleFromClassPath(const char *module) = 0;
+	virtual void             ClearModuleClassPath() = 0;
+	virtual int              SetClassPathSymbolModule(const char *symbol, const char *module) = 0;
+	virtual void             ClearClassPathSymbolModules() = 0;
 
 	// Script functions
 	virtual int                GetLastFunctionId() const = 0;
