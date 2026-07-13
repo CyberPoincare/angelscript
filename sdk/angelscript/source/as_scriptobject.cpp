@@ -829,7 +829,11 @@ void asCScriptObject::EnumReferences(asIScriptEngine *engine)
 
 			// The members of the value type needs to be enumerated
 			// too, since the value type may be holding a reference.
-			if ((prop->type.GetTypeInfo()->flags & asOBJ_VALUE) && (prop->type.GetTypeInfo()->flags & asOBJ_GC))
+			// A constructor exception may leave a non-POD value member unallocated. In
+			// that case the failed script object can still be visited by the GC, but
+			// there is no value object whose references can be enumerated.
+			if (ptr && (prop->type.GetTypeInfo()->flags & asOBJ_VALUE) &&
+				(prop->type.GetTypeInfo()->flags & asOBJ_GC))
 			{
 				reinterpret_cast<asCScriptEngine*>(engine)->CallObjectMethod(ptr, engine, CastToObjectType(prop->type.GetTypeInfo())->beh.gcEnumReferences);
 			}
@@ -872,7 +876,11 @@ void asCScriptObject::ReleaseAllHandles(asIScriptEngine *engine)
 				else
 					ptr = (void*)(((char*)this) + prop->byteOffset);
 
-				reinterpret_cast<asCScriptEngine*>(engine)->CallObjectMethod(ptr, engine, CastToObjectType(prop->type.GetTypeInfo())->beh.gcReleaseAllReferences);
+				// A constructor exception may leave a non-POD value member
+				// unallocated. There are no nested references to release in that case.
+				if (ptr)
+					reinterpret_cast<asCScriptEngine*>(engine)->CallObjectMethod(
+						ptr, engine, CastToObjectType(prop->type.GetTypeInfo())->beh.gcReleaseAllReferences);
 			}
 		}
 		else if (prop->type.IsFuncdef())
@@ -1187,4 +1195,3 @@ AS_API asILockableSharedBool *asCreateLockableSharedBool()
 }
 
 END_AS_NAMESPACE
-
