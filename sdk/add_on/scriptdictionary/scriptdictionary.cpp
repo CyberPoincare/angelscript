@@ -635,10 +635,75 @@ CScriptDictValue::CScriptDictValue(asIScriptEngine *engine, void *value, int typ
 	Set(value, typeId);
 }
 
+CScriptDictValue::CScriptDictValue(const CScriptDictValue &other)
+{
+	m_valueObj = 0;
+	m_engine   = other.m_engine;
+	m_typeId   = 0;
+	if( other.m_typeId != 0 )
+		Set(const_cast<CScriptDictValue&>(other));
+}
+
+#if AS_CAN_USE_CPP11
+CScriptDictValue::CScriptDictValue(CScriptDictValue &&other) noexcept
+{
+	if( other.m_typeId & asTYPEID_MASK_OBJECT )
+		m_valueObj = other.m_valueObj;
+	else
+		m_valueInt = other.m_valueInt;
+	m_engine         = other.m_engine;
+	m_typeId         = other.m_typeId;
+	other.m_valueObj = 0;
+	other.m_typeId   = 0;
+}
+#endif
+
 CScriptDictValue::~CScriptDictValue()
 {
 	FreeValue();
 }
+
+CScriptDictValue &CScriptDictValue::operator=(const CScriptDictValue &other)
+{
+	if( this == &other )
+		return *this;
+
+	if( other.m_typeId == 0 )
+	{
+		FreeValue();
+		m_valueObj = 0;
+		m_engine   = other.m_engine;
+		m_typeId   = 0;
+		return *this;
+	}
+
+	if( m_engine != other.m_engine )
+	{
+		FreeValue();
+		m_engine = other.m_engine;
+	}
+	Set(const_cast<CScriptDictValue&>(other));
+	return *this;
+}
+
+#if AS_CAN_USE_CPP11
+CScriptDictValue &CScriptDictValue::operator=(CScriptDictValue &&other) noexcept
+{
+	if( this == &other )
+		return *this;
+
+	FreeValue();
+	if( other.m_typeId & asTYPEID_MASK_OBJECT )
+		m_valueObj = other.m_valueObj;
+	else
+		m_valueInt = other.m_valueInt;
+	m_engine         = other.m_engine;
+	m_typeId         = other.m_typeId;
+	other.m_valueObj = 0;
+	other.m_typeId   = 0;
+	return *this;
+}
+#endif
 
 void CScriptDictValue::FreeValue()
 {

@@ -65,9 +65,17 @@ public:
 	CScriptDictValue() : m_valueObj(0), m_engine(0), m_typeId(0) {};
 	CScriptDictValue(asIScriptEngine* engine) : m_valueObj(0), m_engine(engine), m_typeId(0) {};
 	CScriptDictValue(asIScriptEngine *engine, void *value, int typeId);
+	CScriptDictValue(const CScriptDictValue &other);
+#if AS_CAN_USE_CPP11
+	CScriptDictValue(CScriptDictValue &&other) noexcept;
+#endif
 
 	// Destructor must not be called without first calling FreeValue, otherwise a memory leak will occur
 	~CScriptDictValue();
+	CScriptDictValue &operator=(const CScriptDictValue &other);
+#if AS_CAN_USE_CPP11
+	CScriptDictValue &operator=(CScriptDictValue &&other) noexcept;
+#endif
 
 	// Replace the stored value
 	void Set(void *value, int typeId);
