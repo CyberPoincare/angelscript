@@ -38,6 +38,8 @@ BEGIN_AS_NAMESPACE
 
 int     asCompareStrings(const char *str1, size_t len1, const char *str2, size_t len2);
 
+// Starsector 定制：float 字面量直接按二进制 32 位精度解析，避免先转 double 再发生二次舍入。
+float   asStringScanFloat(const char *string, size_t *numScanned);
 double  asStringScanDouble(const char *string, size_t *numScanned);
 asQWORD asStringScanUInt64(const char *string, int base, size_t *numScanned, bool *overflow);
 

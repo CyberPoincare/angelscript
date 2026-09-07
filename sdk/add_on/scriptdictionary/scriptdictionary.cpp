@@ -771,6 +771,15 @@ void CScriptDictValue::Set(void *value, int typeId)
 
 void CScriptDictValue::Set(CScriptDictValue &value)
 {
+	// Java Object 桥允许没有 engine 的原生空盒；接收对象继续保有自己的 engine。
+	// 空值没有脚本类型或引用，不能因跨宿主空值赋值触发 engine 断言。
+	if( value.m_typeId == 0 )
+	{
+		FreeValue();
+		m_valueObj = 0;
+		m_typeId = 0;
+		return;
+	}
 	assert(m_engine == value.m_engine);
 	if( value.m_typeId & asTYPEID_OBJHANDLE )
 		Set((void*)&value.m_valueObj, value.m_typeId);
@@ -1471,5 +1480,4 @@ void RegisterScriptDictionary_Generic(asIScriptEngine *engine)
 }
 
 END_AS_NAMESPACE
-
 

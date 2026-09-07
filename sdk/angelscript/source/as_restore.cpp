@@ -2171,7 +2171,7 @@ asQWORD asCReader::ReadEncodedUInt64()
 		i = b;
 	}
 	if( isNegative )
-		i = (asQWORD)(-asINT64(i));
+		i = asQWORD(0) - i; // 保留 INT64_MIN 的补码，不执行有符号溢出。
 
 	return i;
 }
@@ -4705,70 +4705,72 @@ void asCWriter::WriteTypeDeclaration(asCTypeInfo *type, int phase)
 
 void asCWriter::WriteEncodedInt64(asINT64 i)
 {
-	asBYTE signBit = ( i & asINT64(1)<<63 ) ? 0x80 : 0;
-	if( signBit ) i = -i;
+	// Java long/IEEE 常量含 INT64_MIN；无符号幅值避免 -INT64_MIN 溢出后被编码成零。
+	asQWORD magnitude = asQWORD(i);
+	asBYTE signBit = ( magnitude & (asQWORD(1)<<63) ) ? 0x80 : 0;
+	if( signBit ) magnitude = asQWORD(0) - magnitude;
 
 	asBYTE b;
-	if( i < (1<<6) )
+	if( magnitude < (1<<6) )
 	{
-		b = (asBYTE)(signBit + i); WriteData(&b, 1);
+		b = (asBYTE)(signBit + magnitude); WriteData(&b, 1);
 	}
-	else if( i < (1<<13) )
+	else if( magnitude < (1<<13) )
 	{
-		b = asBYTE(0x40 + signBit + (i >> 8)); WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                  WriteData(&b, 1);
+		b = asBYTE(0x40 + signBit + (magnitude >> 8)); WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                  WriteData(&b, 1);
 	}
-	else if( i < (1<<20) )
+	else if( magnitude < (1<<20) )
 	{
-		b = asBYTE(0x60 + signBit + (i >> 16)); WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);            WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                   WriteData(&b, 1);
+		b = asBYTE(0x60 + signBit + (magnitude >> 16)); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);            WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                   WriteData(&b, 1);
 	}
-	else if( i < (1<<27) )
+	else if( magnitude < (1<<27) )
 	{
-		b = asBYTE(0x70 + signBit + (i >> 24)); WriteData(&b, 1);
-		b = asBYTE((i >> 16) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);            WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                   WriteData(&b, 1);
+		b = asBYTE(0x70 + signBit + (magnitude >> 24)); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 16) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);            WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                   WriteData(&b, 1);
 	}
-	else if( i < (asINT64(1)<<34) )
+	else if( magnitude < (asQWORD(1)<<34) )
 	{
-		b = asBYTE(0x78 + signBit + (i >> 32)); WriteData(&b, 1);
-		b = asBYTE((i >> 24) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 16) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);            WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                   WriteData(&b, 1);
+		b = asBYTE(0x78 + signBit + (magnitude >> 32)); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 24) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 16) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);            WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                   WriteData(&b, 1);
 	}
-	else if( i < (asINT64(1)<<41) )
+	else if( magnitude < (asQWORD(1)<<41) )
 	{
-		b = asBYTE(0x7C + signBit + (i >> 40)); WriteData(&b, 1);
-		b = asBYTE((i >> 32) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 24) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 16) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);            WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                   WriteData(&b, 1);
+		b = asBYTE(0x7C + signBit + (magnitude >> 40)); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 32) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 24) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 16) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);            WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                   WriteData(&b, 1);
 	}
-	else if( i < (asINT64(1)<<48) )
+	else if( magnitude < (asQWORD(1)<<48) )
 	{
-		b = asBYTE(0x7E + signBit + (i >> 48)); WriteData(&b, 1);
-		b = asBYTE((i >> 40) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 32) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 24) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 16) & 0xFF);           WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);            WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);                   WriteData(&b, 1);
+		b = asBYTE(0x7E + signBit + (magnitude >> 48)); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 40) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 32) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 24) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 16) & 0xFF);           WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);            WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);                   WriteData(&b, 1);
 	}
 	else
 	{
 		b = asBYTE(0x7F + signBit);   WriteData(&b, 1);
-		b = asBYTE((i >> 56) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 48) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 40) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 32) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 24) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 16) & 0xFF); WriteData(&b, 1);
-		b = asBYTE((i >> 8) & 0xFF);  WriteData(&b, 1);
-		b = asBYTE(i & 0xFF);         WriteData(&b, 1);
+		b = asBYTE((magnitude >> 56) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 48) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 40) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 32) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 24) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 16) & 0xFF); WriteData(&b, 1);
+		b = asBYTE((magnitude >> 8) & 0xFF);  WriteData(&b, 1);
+		b = asBYTE(magnitude & 0xFF);         WriteData(&b, 1);
 	}
 }
 

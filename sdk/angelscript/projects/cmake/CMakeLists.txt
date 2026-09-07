@@ -25,7 +25,9 @@ set(ARCHFLAGS "${CMAKE_SYSTEM_PROCESSOR}")
 if (APPLE AND NOT IOS)
   # CMAKE_SYSTEM_PROCESSOR 描述原生配置时的 CMake 宿主架构。优先采用显式
   # macOS 目标架构，使 x86_64 CMake 进程仍能生成 arm64 AngelScript 原生调用桥。
-  if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
+  if (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+    set(ARCHFLAGS "x86_64")
+  elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR
       (NOT CMAKE_OSX_ARCHITECTURES AND ${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm"))
     set(ARCHFLAGS "aarch64")
   endif ()
@@ -107,6 +109,19 @@ set(ANGELSCRIPT_SOURCE
     ../../source/as_typeinfo.cpp
     ../../source/as_variablescope.cpp
 )
+
+# Starsector 定制：平台调用桥的源文件选择由本子模块负责。
+# macOS 的非目标平台空翻译单元会令 libtool 输出无符号归档警告；
+# 按显式目标架构保留实际 native-call 实现，避免依赖上层工程改写 SOURCES。
+if(APPLE)
+    if(ARCHFLAGS STREQUAL "x86_64")
+        list(FILTER ANGELSCRIPT_SOURCE
+             EXCLUDE REGEX ".*/as_callfunc_(mips|x86|x64_msvc|x64_mingw)\\.cpp$")
+    else()
+        list(FILTER ANGELSCRIPT_SOURCE
+             EXCLUDE REGEX ".*/as_callfunc_(mips|x86|x64_gcc|x64_msvc|x64_mingw)\\.cpp$")
+    endif()
+endif()
 
 if(MSVC AND CMAKE_CL_64)
     enable_language(ASM_MASM)

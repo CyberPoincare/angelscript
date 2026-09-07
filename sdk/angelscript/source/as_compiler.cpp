@@ -12043,7 +12043,7 @@ int asCCompiler::CompileExpressionValue(asCScriptNode *node, asCExprContext *ctx
 			// TODO: Check for overflow
 
 			size_t numScanned;
-			float v = float(asStringScanDouble(value.AddressOf(), &numScanned));
+			float v = asStringScanFloat(value.AddressOf(), &numScanned);
 			ctx->type.SetConstantF(asCDataType::CreatePrimitive(ttFloat, true), v);
 #ifndef AS_USE_DOUBLE_AS_FLOAT
 			// Don't check this if we have double as float, because then the whole token would be scanned (i.e. no f suffix)
@@ -16308,17 +16308,13 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 
 	bool isConstant = lctx->type.isConstant && rctx->type.isConstant;
 
-	// Verify if we are dividing with a constant zero
-	if( rctx->type.isConstant &&
-		(op == ttSlash   || op == ttDivAssign ||
-		 op == ttPercent || op == ttModAssign) &&
-		((rctx->type.dataType.GetSizeInMemoryBytes() == 4 && rctx->type.GetConstantDW() == 0) ||
-		 (rctx->type.dataType.GetSizeInMemoryBytes() == 8 && rctx->type.GetConstantQW() == 0) ||
-		 (rctx->type.dataType.GetSizeInMemoryBytes() == 1 && rctx->type.GetConstantB() == 0) ||
-		 (rctx->type.dataType.GetSizeInMemoryBytes() == 2 && rctx->type.GetConstantW() == 0)) )
-	{
-		Error(TXT_DIVIDE_BY_ZERO, node);
-	}
+	// Java 的整型零除数在执行时抛异常；浮点零除数是合法 IEEE 754 运算。
+	if( isConstant &&
+		(lctx->type.dataType.IsIntegerType() || lctx->type.dataType.IsUnsignedType()) &&
+		(op == ttSlash || op == ttDivAssign || op == ttPercent || op == ttModAssign) &&
+		((rctx->type.dataType.GetSizeInMemoryDWords() == 1 && rctx->type.GetConstantDW() == 0) ||
+		 (rctx->type.dataType.GetSizeInMemoryDWords() == 2 && rctx->type.GetConstantQW() == 0)) )
+		isConstant = false;
 
 	if( !isConstant )
 	{
@@ -16481,34 +16477,34 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 		{
 			if( lctx->type.dataType.GetSizeInMemoryDWords() == 1 )
 			{
-				int v = 0;
+				asDWORD v = 0;
 				if( op == ttPlus )
-					v = int(lctx->type.GetConstantDW()) + int(rctx->type.GetConstantDW());
+					v = lctx->type.GetConstantDW() + rctx->type.GetConstantDW();
 				else if( op == ttMinus )
-					v = int(lctx->type.GetConstantDW()) - int(rctx->type.GetConstantDW());
+					v = lctx->type.GetConstantDW() - rctx->type.GetConstantDW();
 				else if( op == ttStar )
-					v = int(lctx->type.GetConstantDW()) * int(rctx->type.GetConstantDW());
+					v = lctx->type.GetConstantDW() * rctx->type.GetConstantDW();
 				else if( op == ttSlash )
 				{
-					// TODO: Should probably report an error, rather than silently convert the value to 0
-					if( rctx->type.GetConstantDW() == 0 || (int(rctx->type.GetConstantDW()) == -1 && lctx->type.GetConstantDW() == 0x80000000) )
-						v = 0;
+					// Java 有符号 MIN / -1 保留 MIN，MIN % -1 为 0。
+					if( lctx->type.dataType.IsIntegerType() &&
+						rctx->type.GetConstantDW() == asDWORD(-1) && lctx->type.GetConstantDW() == 0x80000000U )
+						v = lctx->type.GetConstantDW();
+					else if( lctx->type.dataType.IsIntegerType() )
+						v = int(lctx->type.GetConstantDW()) / int(rctx->type.GetConstantDW());
 					else
-						if( lctx->type.dataType.IsIntegerType() )
-							v = int(lctx->type.GetConstantDW()) / int(rctx->type.GetConstantDW());
-						else
-							v = lctx->type.GetConstantDW() / rctx->type.GetConstantDW();
+						v = lctx->type.GetConstantDW() / rctx->type.GetConstantDW();
 				}
 				else if( op == ttPercent )
 				{
-					// TODO: Should probably report an error, rather than silently convert the value to 0
-					if( rctx->type.GetConstantDW() == 0 || (int(rctx->type.GetConstantDW()) == -1 && lctx->type.GetConstantDW() == 0x80000000) )
+					// Java 有符号 MIN / -1 保留 MIN，MIN % -1 为 0。
+					if( lctx->type.dataType.IsIntegerType() &&
+						rctx->type.GetConstantDW() == asDWORD(-1) && lctx->type.GetConstantDW() == 0x80000000U )
 						v = 0;
+					else if( lctx->type.dataType.IsIntegerType() )
+						v = int(lctx->type.GetConstantDW()) % int(rctx->type.GetConstantDW());
 					else
-						if( lctx->type.dataType.IsIntegerType() )
-							v = int(lctx->type.GetConstantDW()) % int(rctx->type.GetConstantDW());
-						else
-							v = lctx->type.GetConstantDW() % rctx->type.GetConstantDW();
+						v = lctx->type.GetConstantDW() % rctx->type.GetConstantDW();
 				}
 				else if( op == ttStarStar )
 				{
@@ -16532,32 +16528,32 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 			{
 				asQWORD v = 0;
 				if( op == ttPlus )
-					v = asINT64(lctx->type.GetConstantQW()) + asINT64(rctx->type.GetConstantQW());
+					v = lctx->type.GetConstantQW() + rctx->type.GetConstantQW();
 				else if( op == ttMinus )
-					v = asINT64(lctx->type.GetConstantQW()) - asINT64(rctx->type.GetConstantQW());
+					v = lctx->type.GetConstantQW() - rctx->type.GetConstantQW();
 				else if( op == ttStar )
-					v = asINT64(lctx->type.GetConstantQW()) * asINT64(rctx->type.GetConstantQW());
+					v = lctx->type.GetConstantQW() * rctx->type.GetConstantQW();
 				else if( op == ttSlash )
 				{
-					// TODO: Should probably report an error, rather than silently convert the value to 0
-					if( rctx->type.GetConstantQW() == 0 || (rctx->type.GetConstantQW() == asQWORD(-1) && lctx->type.GetConstantQW() == (asQWORD(1)<<63)) )
-						v = 0;
+					// Java 有符号 MIN / -1 保留 MIN，MIN % -1 为 0。
+					if( lctx->type.dataType.IsIntegerType() &&
+						rctx->type.GetConstantQW() == asQWORD(-1) && lctx->type.GetConstantQW() == (asQWORD(1)<<63) )
+						v = lctx->type.GetConstantQW();
+					else if( lctx->type.dataType.IsIntegerType() )
+						v = asINT64(lctx->type.GetConstantQW()) / asINT64(rctx->type.GetConstantQW());
 					else
-						if( lctx->type.dataType.IsIntegerType() )
-							v = asINT64(lctx->type.GetConstantQW()) / asINT64(rctx->type.GetConstantQW());
-						else
-							v = lctx->type.GetConstantQW() / rctx->type.GetConstantQW();
+						v = lctx->type.GetConstantQW() / rctx->type.GetConstantQW();
 				}
 				else if( op == ttPercent )
 				{
-				    // TODO: Should probably report an error, rather than silently convert the value to 0
-					if( rctx->type.GetConstantQW() == 0 || (rctx->type.GetConstantQW() == asQWORD(-1) && lctx->type.GetConstantQW() == (asQWORD(1)<<63)) )
+					// Java 有符号 MIN / -1 保留 MIN，MIN % -1 为 0。
+					if( lctx->type.dataType.IsIntegerType() &&
+						rctx->type.GetConstantQW() == asQWORD(-1) && lctx->type.GetConstantQW() == (asQWORD(1)<<63) )
 						v = 0;
+					else if( lctx->type.dataType.IsIntegerType() )
+						v = asINT64(lctx->type.GetConstantQW()) % asINT64(rctx->type.GetConstantQW());
 					else
-						if( lctx->type.dataType.IsIntegerType() )
-							v = asINT64(lctx->type.GetConstantQW()) % asINT64(rctx->type.GetConstantQW());
-						else
-							v = lctx->type.GetConstantQW() % rctx->type.GetConstantQW();
+						v = lctx->type.GetConstantQW() % rctx->type.GetConstantQW();
 				}
 				else if( op == ttStarStar )
 				{
@@ -16588,19 +16584,9 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 			else if( op == ttStar )
 				v = lctx->type.GetConstantF() * rctx->type.GetConstantF();
 			else if( op == ttSlash )
-			{
-				if( rctx->type.GetConstantF() == 0 )
-					v = 0;
-				else
-					v = lctx->type.GetConstantF() / rctx->type.GetConstantF();
-			}
+				v = lctx->type.GetConstantF() / rctx->type.GetConstantF();
 			else if( op == ttPercent )
-			{
-				if( rctx->type.GetConstantF() == 0 )
-					v = 0;
-				else
-					v = fmodf(lctx->type.GetConstantF(), rctx->type.GetConstantF());
-			}
+				v = fmodf(lctx->type.GetConstantF(), rctx->type.GetConstantF());
 			else if( op == ttStarStar )
 			{
 				v = powf(lctx->type.GetConstantF(), rctx->type.GetConstantF());
@@ -16635,19 +16621,9 @@ void asCCompiler::CompileMathOperator(asCScriptNode *node, asCExprContext *lctx,
 				else if( op == ttStar )
 					v = lctx->type.GetConstantD() * rctx->type.GetConstantD();
 				else if( op == ttSlash )
-				{
-					if( rctx->type.GetConstantD() == 0 )
-						v = 0;
-					else
-						v = lctx->type.GetConstantD() / rctx->type.GetConstantD();
-				}
+					v = lctx->type.GetConstantD() / rctx->type.GetConstantD();
 				else if( op == ttPercent )
-				{
-					if( rctx->type.GetConstantD() == 0 )
-						v = 0;
-					else
-						v = fmod(lctx->type.GetConstantD(), rctx->type.GetConstantD());
-				}
+					v = fmod(lctx->type.GetConstantD(), rctx->type.GetConstantD());
 				else if( op == ttStarStar )
 				{
 					v = pow(lctx->type.GetConstantD(), rctx->type.GetConstantD());
@@ -17250,6 +17226,14 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 			int b = lctx->type.stackOffset;
 			int c = rctx->type.stackOffset;
 
+			// JVMS 17 fcmp/dcmp：NaN 的四种大小比较均为 false。
+			if( (to.IsFloatType() || to.IsDoubleType()) &&
+				(op == ttGreaterThan || op == ttGreaterThanOrEqual) )
+			{
+				int temporary = b; b = c; c = temporary;
+				iT = op == ttGreaterThan ? asBC_TS : asBC_TNP;
+			}
+
 			ctx->bc.InstrW_W(iCmp, b, c);
 			ctx->bc.Instr(iT);
 			ctx->bc.InstrSHORT(asBC_CpyRtoV4, (short)a);
@@ -17297,11 +17281,13 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 		else
 		{
 			int i = 0;
+			bool unordered = false;
 			if( lctx->type.dataType.IsIntegerType() && lctx->type.dataType.GetSizeInMemoryDWords() == 1 )
 			{
-				int v = int(lctx->type.GetConstantDW()) - int(rctx->type.GetConstantDW());
-				if( v < 0 ) i = -1;
-				if( v > 0 ) i = 1;
+				int v1 = int(lctx->type.GetConstantDW());
+				int v2 = int(rctx->type.GetConstantDW());
+				if( v1 < v2 ) i = -1;
+				if( v1 > v2 ) i = 1;
 			}
 			else if( lctx->type.dataType.IsUnsignedType() && lctx->type.dataType.GetSizeInMemoryDWords() == 1 )
 			{
@@ -17312,9 +17298,10 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 			}
 			else if( lctx->type.dataType.IsIntegerType() && lctx->type.dataType.GetSizeInMemoryDWords() == 2 )
 			{
-				asINT64 v = asINT64(lctx->type.GetConstantQW()) - asINT64(rctx->type.GetConstantQW());
-				if( v < 0 ) i = -1;
-				if( v > 0 ) i = 1;
+				asINT64 v1 = asINT64(lctx->type.GetConstantQW());
+				asINT64 v2 = asINT64(rctx->type.GetConstantQW());
+				if( v1 < v2 ) i = -1;
+				if( v1 > v2 ) i = 1;
 			}
 			else if( lctx->type.dataType.IsUnsignedType() && lctx->type.dataType.GetSizeInMemoryDWords() == 2 )
 			{
@@ -17325,15 +17312,19 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 			}
 			else if( lctx->type.dataType.IsFloatType() )
 			{
-				float v = lctx->type.GetConstantF() - rctx->type.GetConstantF();
-				if( v < 0 ) i = -1;
-				if( v > 0 ) i = 1;
+				float v1 = lctx->type.GetConstantF();
+				float v2 = rctx->type.GetConstantF();
+				if( v1 < v2 ) i = -1;
+				if( v1 > v2 ) i = 1;
+				unordered = v1 != v1 || v2 != v2;
 			}
 			else if( lctx->type.dataType.IsDoubleType() )
 			{
-				double v = lctx->type.GetConstantD() - rctx->type.GetConstantD();
-				if( v < 0 ) i = -1;
-				if( v > 0 ) i = 1;
+				double v1 = lctx->type.GetConstantD();
+				double v2 = rctx->type.GetConstantD();
+				if( v1 < v2 ) i = -1;
+				if( v1 > v2 ) i = 1;
+				unordered = v1 != v1 || v2 != v2;
 			}
 
 
@@ -17349,6 +17340,7 @@ void asCCompiler::CompileComparisonOperator(asCScriptNode *node, asCExprContext 
 				i = (i > 0 ? VALUE_OF_BOOLEAN_TRUE : 0);
 			else if( op == ttGreaterThanOrEqual )
 				i = (i >= 0 ? VALUE_OF_BOOLEAN_TRUE : 0);
+			if( unordered ) i = op == ttNotEqual ? VALUE_OF_BOOLEAN_TRUE : 0;
 
 			#if AS_SIZEOF_BOOL == 1
 				ctx->type.SetConstantB(asCDataType::CreatePrimitive(ttBool, true), (asBYTE)i);

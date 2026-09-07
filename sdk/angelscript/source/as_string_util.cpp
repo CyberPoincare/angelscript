@@ -33,6 +33,13 @@
 
 #include <string.h>     // some compilers declare memcpy() here
 #include <math.h>       // pow()
+#include <locale.h>
+#if defined(__APPLE__)
+#include <xlocale.h>
+#endif
+#include <stdlib.h>
+#include <stdexcept>
+#include <string>
 
 #if !defined(AS_NO_MEMORY_H)
 #include <memory.h>
@@ -74,100 +81,87 @@ int asCompareStrings(const char *str1, size_t len1, const char *str2, size_t len
 	return result;
 }
 
-double asStringScanDouble(const char *string, size_t *numScanned)
+// Java 浮点字面量按目标精度一次舍入；旧逐位累加再 pow 会丢失精度和 subnormal。
+// 宿主数值解析属于语言兼容边界，显式 C locale 避免依赖玩家的区域设置。
+class asCNumericLocale
 {
-	// I decided to do my own implementation of strtod() because this function
-	// doesn't seem to be present on all systems. iOS 5 for example doesn't appear 
-	// to include the function in the standard lib.
-	
-	// Another reason is that the standard implementation of strtod() is dependent
-	// on the locale on some systems, i.e. it may use comma instead of dot for 
-	// the decimal indicator. This can be avoided by forcing the locale to "C" with
-	// setlocale(), but this is another thing that is highly platform dependent.
-
-	double value = 0;
-	double fraction = 0.1;
-	int exponent = 0;
-	bool negativeExponent = false;
-	int c = 0;
-
-	// The tokenizer separates the sign from the number in   
-	// two tokens so we'll never have a sign to parse here
-
-	// Parse the integer value
-	for( ;; )
+public:
+#if defined(_WIN32)
+	_locale_t locale;
+	asCNumericLocale() : locale(_create_locale(LC_NUMERIC, "C"))
+#else
+	locale_t locale;
+	asCNumericLocale() : locale(newlocale(LC_NUMERIC_MASK, "C", 0))
+#endif
 	{
-		if (string[c] >= '0' && string[c] <= '9')
-			value = value * 10 + double(string[c] - '0');
-		else if (string[c] == '\'' && string[c + 1] && string[c + 1] >= '0' && string[c + 1] <= '9')
-			; // skip separators
-		else 
-			break;
-
-		c++;
+		if( !locale ) throw std::runtime_error("Unable to create numeric C locale");
 	}
+	~asCNumericLocale()
+	{
+#if defined(_WIN32)
+		_free_locale(locale);
+#else
+		freelocale(locale);
+#endif
+	}
+};
 
+static const asCNumericLocale &asNumericLocale()
+{
+	static const asCNumericLocale locale;
+	return locale;
+}
+
+static std::string asStringScanNumber(const char *string, size_t *numScanned)
+{
+	std::string value;
+	size_t c = 0;
+	auto digits = [&]() {
+		for( ;; )
+		{
+			if( string[c] >= '0' && string[c] <= '9' )
+				value += string[c];
+			else if( string[c] == '\'' && string[c + 1] >= '0' && string[c + 1] <= '9' )
+				; // AS 数字分隔符不属于十进制数值。
+			else
+				break;
+			++c;
+		}
+	};
+	digits();
 	if( string[c] == '.' )
 	{
-		c++;
-
-		// Parse the fraction
-		for( ;; )
-		{
-			if( string[c] >= '0' && string[c] <= '9' )
-				value += fraction * double(string[c] - '0');
-			else if (string[c] == '\'' && string[c + 1] && string[c + 1] >= '0' && string[c + 1] <= '9')
-			{
-				// skip separators
-				c++;
-				continue;
-			}
-			else
-				break;
-
-			c++;
-			fraction *= 0.1;
-		}
+		value += string[c++];
+		digits();
 	}
-
 	if( string[c] == 'e' || string[c] == 'E' )
 	{
-		c++;
-
-		// Parse the sign of the exponent
-		if( string[c] == '-' )
-		{
-			negativeExponent = true;
-			c++;
-		}
-		else if( string[c] == '+' )
-			c++;
-
-		// Parse the exponent value
-		for( ;; )
-		{
-			if( string[c] >= '0' && string[c] <= '9' )
-				exponent = exponent*10 + int(string[c] - '0');
-			else if (string[c] == '\'' && string[c + 1] && string[c + 1] >= '0' && string[c + 1] <= '9')
-				; // skip separators
-			else
-				break;
-
-			c++;
-		}
+		value += string[c++];
+		if( string[c] == '-' || string[c] == '+' ) value += string[c++];
+		digits();
 	}
-
-	if( exponent )
-	{
-		if( negativeExponent )
-			exponent = -exponent;
-		value *= pow(10.0, exponent);
-	}
-
-	if( numScanned )
-		*numScanned = c;
-
+	if( numScanned ) *numScanned = c;
 	return value;
+}
+
+float asStringScanFloat(const char *string, size_t *numScanned)
+{
+	const std::string value = asStringScanNumber(string, numScanned);
+#if defined(_WIN32)
+	return _strtof_l(value.c_str(), 0, asNumericLocale().locale);
+#else
+	return strtof_l(value.c_str(), 0, asNumericLocale().locale);
+#endif
+}
+
+double asStringScanDouble(const char *string, size_t *numScanned)
+{
+	const std::string value = asStringScanNumber(string, numScanned);
+#if defined(_WIN32)
+	return _strtod_l(value.c_str(), 0, asNumericLocale().locale);
+#else
+	return strtod_l(value.c_str(), 0, asNumericLocale().locale);
+#endif
 }
 
 // Converts a character to the decimal number based on the radix

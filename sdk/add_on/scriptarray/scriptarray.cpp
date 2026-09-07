@@ -715,7 +715,10 @@ void CScriptArray::Resize(asUINT numElements)
 void CScriptArray::RemoveRange(asUINT start, asUINT count)
 {
 	if (count == 0)
+	{
+		++modificationCount;
 		return;
+	}
 
 	if( buffer == 0 || start > buffer->numElements )
 	{
@@ -727,6 +730,7 @@ void CScriptArray::RemoveRange(asUINT start, asUINT count)
 	}
 
 	// Cap count to the end of the array
+	++modificationCount;
 	if (start + count > buffer->numElements)
 		count = buffer->numElements - start;
 
@@ -743,6 +747,7 @@ void CScriptArray::RemoveRange(asUINT start, asUINT count)
 // Internal
 void CScriptArray::Resize(int delta, asUINT at)
 {
+	++modificationCount;
 	if( delta < 0 )
 	{
 		if( -delta > (int)buffer->numElements )
@@ -838,6 +843,11 @@ bool CScriptArray::CheckMaxSize(asUINT numElements)
 asITypeInfo *CScriptArray::GetArrayObjectType() const
 {
 	return objType;
+}
+
+asQWORD CScriptArray::GetModificationCount() const
+{
+	return modificationCount;
 }
 
 int CScriptArray::GetArrayTypeId() const

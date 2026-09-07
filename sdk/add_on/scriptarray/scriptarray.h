@@ -97,6 +97,8 @@ public:
 
 	// Return the address of internal buffer for direct manipulation of elements
 	void *GetBuffer();
+	// Java List 桥接：结构修改计数供宿主复刻 ArrayList.Itr 的 fail-fast 检查。
+	asQWORD GetModificationCount() const;
 
 	// GC methods
 	int  GetRefCount();
@@ -112,6 +114,7 @@ protected:
 	SArrayBuffer   *buffer;
 	int             elementSize;
 	int             subTypeId;
+	asQWORD         modificationCount = 0;
 
 	// Constructors
 	CScriptArray(asITypeInfo *ot, void *initBuf); // Called from script when initialized with list

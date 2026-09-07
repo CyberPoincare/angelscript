@@ -2704,9 +2704,11 @@ static const void *const dispatch_table[256] = {
 //--------------------
 // negate value
 
+	// Starsector 定制：VM 的整数回绕、移位、除余和 IEEE 浮点运算遵循 Java 语义，
+	// 与 as_compiler.cpp 的常量折叠保持一致；不能引入 C++ 有符号溢出或浮点零除异常。
 	// Negate the integer value in the variable
 	INSTRUCTION(asBC_NEGi):
-		*(l_fp - asBC_SWORDARG0(l_bc)) = asDWORD(-int(*(l_fp - asBC_SWORDARG0(l_bc))));
+		*(l_fp - asBC_SWORDARG0(l_bc)) = asDWORD(0) - *(l_fp - asBC_SWORDARG0(l_bc));
 		l_bc++;
 		NEXT_INSTRUCTION();
 
@@ -2751,13 +2753,13 @@ static const void *const dispatch_table[256] = {
 
 	// Increment the integer value pointed to by the register
 	INSTRUCTION(asBC_INCi):
-		++(**(int**)&m_regs.valueRegister);
+		++(**(asDWORD**)&m_regs.valueRegister);
 		l_bc++;
 		NEXT_INSTRUCTION();
 
 	// Decrement the integer value pointed to by the register
 	INSTRUCTION(asBC_DECi):
-		--(**(int**)&m_regs.valueRegister);
+		--(**(asDWORD**)&m_regs.valueRegister);
 		l_bc++;
 		NEXT_INSTRUCTION();
 
@@ -2787,13 +2789,13 @@ static const void *const dispatch_table[256] = {
 
 	// Increment the local integer variable
 	INSTRUCTION(asBC_IncVi):
-		(*(int*)(l_fp - asBC_SWORDARG0(l_bc)))++;
+		(*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)))++;
 		l_bc++;
 		NEXT_INSTRUCTION();
 
 	// Decrement the local integer variable
 	INSTRUCTION(asBC_DecVi):
-		(*(int*)(l_fp - asBC_SWORDARG0(l_bc)))--;
+		(*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)))--;
 		l_bc++;
 		NEXT_INSTRUCTION();
 
@@ -3665,17 +3667,17 @@ static const void *const dispatch_table[256] = {
 	//------------------------------
 	// Math operations
 	INSTRUCTION(asBC_ADDi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) + *(int*)(l_fp - asBC_SWORDARG2(l_bc));
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) + *(asDWORD*)(l_fp - asBC_SWORDARG2(l_bc));
 		l_bc += 2;
 		NEXT_INSTRUCTION();
 
 	INSTRUCTION(asBC_SUBi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) - *(int*)(l_fp - asBC_SWORDARG2(l_bc));
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) - *(asDWORD*)(l_fp - asBC_SWORDARG2(l_bc));
 		l_bc += 2;
 		NEXT_INSTRUCTION();
 
 	INSTRUCTION(asBC_MULi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) * *(int*)(l_fp - asBC_SWORDARG2(l_bc));
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) * *(asDWORD*)(l_fp - asBC_SWORDARG2(l_bc));
 		l_bc += 2;
 		NEXT_INSTRUCTION();
 
@@ -3693,23 +3695,11 @@ static const void *const dispatch_table[256] = {
 				SetInternalException(TXT_DIVIDE_BY_ZERO);
 				return;
 			}
-			else if( divider == -1 )
-			{
-				// Need to check if the value that is divided is 0x80000000
-				// as dividing it with -1 will cause an overflow exception
-				if( *(int*)(l_fp - asBC_SWORDARG1(l_bc)) == int(0x80000000) )
-				{
-					// Need to move the values back to the context
-					m_regs.programPointer    = l_bc;
-					m_regs.stackPointer      = l_sp;
-					m_regs.stackFramePointer = l_fp;
-
-					// Raise exception
-					SetInternalException(TXT_DIVIDE_OVERFLOW);
-					return;
-				}
-			}
-			*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
+			// JVMS 17 idiv/ldiv/irem/lrem：MIN / -1 为 MIN，余数为 0。
+			if( divider == -1 && *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) == 0x80000000U )
+				*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = 0x80000000U;
+			else
+				*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
 		}
 		l_bc += 2;
 		NEXT_INSTRUCTION();
@@ -3728,23 +3718,11 @@ static const void *const dispatch_table[256] = {
 				SetInternalException(TXT_DIVIDE_BY_ZERO);
 				return;
 			}
-			else if( divider == -1 )
-			{
-				// Need to check if the value that is divided is 0x80000000
-				// as dividing it with -1 will cause an overflow exception
-				if( *(int*)(l_fp - asBC_SWORDARG1(l_bc)) == int(0x80000000) )
-				{
-					// Need to move the values back to the context
-					m_regs.programPointer    = l_bc;
-					m_regs.stackPointer      = l_sp;
-					m_regs.stackFramePointer = l_fp;
-
-					// Raise exception
-					SetInternalException(TXT_DIVIDE_OVERFLOW);
-					return;
-				}
-			}
-			*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) % divider;
+			// JVMS 17 idiv/ldiv/irem/lrem：MIN / -1 为 MIN，余数为 0。
+			if( divider == -1 && *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) == 0x80000000U )
+				*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = 0;
+			else
+				*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) % divider;
 		}
 		l_bc += 2;
 		NEXT_INSTRUCTION();
@@ -3767,17 +3745,7 @@ static const void *const dispatch_table[256] = {
 	INSTRUCTION(asBC_DIVf):
 		{
 			float divider = *(float*)(l_fp - asBC_SWORDARG2(l_bc));
-			if( divider == 0 )
-			{
-				// Need to move the values back to the context
-				m_regs.programPointer    = l_bc;
-				m_regs.stackPointer      = l_sp;
-				m_regs.stackFramePointer = l_fp;
-
-				// Raise exception
-				SetInternalException(TXT_DIVIDE_BY_ZERO);
-				return;
-			}
+			// JVMS 17 fdiv/ddiv/frem/drem：零除数按 IEEE 754 产生无穷或 NaN。
 			*(float*)(l_fp - asBC_SWORDARG0(l_bc)) = *(float*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
 		}
 		l_bc += 2;
@@ -3786,17 +3754,7 @@ static const void *const dispatch_table[256] = {
 	INSTRUCTION(asBC_MODf):
 		{
 			float divider = *(float*)(l_fp - asBC_SWORDARG2(l_bc));
-			if( divider == 0 )
-			{
-				// Need to move the values back to the context
-				m_regs.programPointer    = l_bc;
-				m_regs.stackPointer      = l_sp;
-				m_regs.stackFramePointer = l_fp;
-
-				// Raise exception
-				SetInternalException(TXT_DIVIDE_BY_ZERO);
-				return;
-			}
+			// JVMS 17 fdiv/ddiv/frem/drem：零除数按 IEEE 754 产生无穷或 NaN。
 			*(float*)(l_fp - asBC_SWORDARG0(l_bc)) = fmodf(*(float*)(l_fp - asBC_SWORDARG1(l_bc)), divider);
 		}
 		l_bc += 2;
@@ -3820,17 +3778,7 @@ static const void *const dispatch_table[256] = {
 	INSTRUCTION(asBC_DIVd):
 		{
 			double divider = *(double*)(l_fp - asBC_SWORDARG2(l_bc));
-			if( divider == 0 )
-			{
-				// Need to move the values back to the context
-				m_regs.programPointer    = l_bc;
-				m_regs.stackPointer      = l_sp;
-				m_regs.stackFramePointer = l_fp;
-
-				// Raise exception
-				SetInternalException(TXT_DIVIDE_BY_ZERO);
-				return;
-			}
+			// JVMS 17 fdiv/ddiv/frem/drem：零除数按 IEEE 754 产生无穷或 NaN。
 
 			*(double*)(l_fp - asBC_SWORDARG0(l_bc)) = *(double*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
 			l_bc += 2;
@@ -3840,17 +3788,7 @@ static const void *const dispatch_table[256] = {
 	INSTRUCTION(asBC_MODd):
 		{
 			double divider = *(double*)(l_fp - asBC_SWORDARG2(l_bc));
-			if( divider == 0 )
-			{
-				// Need to move the values back to the context
-				m_regs.programPointer    = l_bc;
-				m_regs.stackPointer      = l_sp;
-				m_regs.stackFramePointer = l_fp;
-
-				// Raise exception
-				SetInternalException(TXT_DIVIDE_BY_ZERO);
-				return;
-			}
+			// JVMS 17 fdiv/ddiv/frem/drem：零除数按 IEEE 754 产生无穷或 NaN。
 
 			*(double*)(l_fp - asBC_SWORDARG0(l_bc)) = fmod(*(double*)(l_fp - asBC_SWORDARG1(l_bc)), divider);
 			l_bc += 2;
@@ -3860,17 +3798,17 @@ static const void *const dispatch_table[256] = {
 	//------------------------------
 	// Math operations with constant value
 	INSTRUCTION(asBC_ADDIi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) + asBC_INTARG(l_bc+1);
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) + asBC_DWORDARG(l_bc+1);
 		l_bc += 3;
 		NEXT_INSTRUCTION();
 
 	INSTRUCTION(asBC_SUBIi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) - asBC_INTARG(l_bc+1);
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) - asBC_DWORDARG(l_bc+1);
 		l_bc += 3;
 		NEXT_INSTRUCTION();
 
 	INSTRUCTION(asBC_MULIi):
-		*(int*)(l_fp - asBC_SWORDARG0(l_bc)) = *(int*)(l_fp - asBC_SWORDARG1(l_bc)) * asBC_INTARG(l_bc+1);
+		*(asDWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asDWORD*)(l_fp - asBC_SWORDARG1(l_bc)) * asBC_DWORDARG(l_bc+1);
 		l_bc += 3;
 		NEXT_INSTRUCTION();
 
@@ -4140,7 +4078,7 @@ static const void *const dispatch_table[256] = {
 		NEXT_INSTRUCTION();
 
 	INSTRUCTION(asBC_NEGi64):
-		*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc)) = -*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc));
+		*(asQWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = asQWORD(0) - *(asQWORD*)(l_fp - asBC_SWORDARG0(l_bc));
 		l_bc++;
 		NEXT_INSTRUCTION();
 
@@ -4188,24 +4126,11 @@ static const void *const dispatch_table[256] = {
 				SetInternalException(TXT_DIVIDE_BY_ZERO);
 				return;
 			}
-			else if( divider == -1 )
-			{
-				// Need to check if the value that is divided is 1<<63
-				// as dividing it with -1 will cause an overflow exception
-				if( *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) == (asINT64(1)<<63) )
-				{
-					// Need to move the values back to the context
-					m_regs.programPointer    = l_bc;
-					m_regs.stackPointer      = l_sp;
-					m_regs.stackFramePointer = l_fp;
-
-					// Raise exception
-					SetInternalException(TXT_DIVIDE_OVERFLOW);
-					return;
-				}
-			}
-
-			*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
+			// JVMS 17 idiv/ldiv/irem/lrem：MIN / -1 为 MIN，余数为 0。
+			if( divider == -1 && *(asQWORD*)(l_fp - asBC_SWORDARG1(l_bc)) == (asQWORD(1)<<63) )
+				*(asQWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = (asQWORD(1)<<63);
+			else
+				*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) / divider;
 		}
 		l_bc += 2;
 		NEXT_INSTRUCTION();
@@ -4224,23 +4149,11 @@ static const void *const dispatch_table[256] = {
 				SetInternalException(TXT_DIVIDE_BY_ZERO);
 				return;
 			}
-			else if( divider == -1 )
-			{
-				// Need to check if the value that is divided is 1<<63
-				// as dividing it with -1 will cause an overflow exception
-				if( *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) == (asINT64(1)<<63) )
-				{
-					// Need to move the values back to the context
-					m_regs.programPointer    = l_bc;
-					m_regs.stackPointer      = l_sp;
-					m_regs.stackFramePointer = l_fp;
-
-					// Raise exception
-					SetInternalException(TXT_DIVIDE_OVERFLOW);
-					return;
-				}
-			}
-			*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) % divider;
+			// JVMS 17 idiv/ldiv/irem/lrem：MIN / -1 为 MIN，余数为 0。
+			if( divider == -1 && *(asQWORD*)(l_fp - asBC_SWORDARG1(l_bc)) == (asQWORD(1)<<63) )
+				*(asQWORD*)(l_fp - asBC_SWORDARG0(l_bc)) = 0;
+			else
+				*(asINT64*)(l_fp - asBC_SWORDARG0(l_bc)) = *(asINT64*)(l_fp - asBC_SWORDARG1(l_bc)) % divider;
 		}
 		l_bc += 2;
 		NEXT_INSTRUCTION();
@@ -6947,6 +6860,5 @@ asQWORD as_powu64(asQWORD base, asQWORD exponent, bool& isOverflow)
 }
 
 END_AS_NAMESPACE
-
 
 
