@@ -8604,6 +8604,25 @@ asUINT asCCompiler::ImplicitConvObjectToObject(asCExprContext *ctx, const asCDat
 		// Did we find a matching constructor?
 		if( funcs.GetLength() == 1 )
 		{
+			// 项目定制：? 参数的隐式 ASHANDLE 构造需要把源对象转成真正的句柄。
+			// string 等值类型无法完成该转换；匹配与代码生成阶段采用相同前提，
+			// 保持类型错误诊断，避免原先在 ImplicitConversion 后触发断言或生成无效调用。
+			asCScriptFunction *matched = builder->GetFunctionDescription(funcs[0]);
+			if( matched->parameterTypes[0].GetTokenType() == ttQuestion && !ctx->type.isExplicitHandle )
+			{
+				asCDataType sourceHandle = ctx->type.dataType;
+				if( sourceHandle.MakeHandle(true) < 0 || !sourceHandle.IsObjectHandle() )
+				{
+					if( generateCode && node )
+					{
+						asCString str;
+						str.Format(TXT_CANT_IMPLICITLY_CONVERT_s_TO_s, ctx->type.dataType.Format(outFunc->nameSpace).AddressOf(), to.Format(outFunc->nameSpace).AddressOf());
+						Error(str, node);
+					}
+					return asCC_NO_CONV;
+				}
+			}
+
 			if( generateCode )
 			{
 				// If the ASHANDLE receives a variable type parameter, then we need to
@@ -18580,6 +18599,4 @@ void asCExprContext::Merge(asCExprContext *after)
 END_AS_NAMESPACE
 
 #endif // AS_NO_COMPILER
-
-
 
