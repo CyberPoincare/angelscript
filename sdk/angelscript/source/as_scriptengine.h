@@ -53,6 +53,7 @@
 #include "as_gc.h"
 #include "as_tokenizer.h"
 #include "as_map.h"
+#include <memory>
 
 BEGIN_AS_NAMESPACE
 
@@ -175,6 +176,7 @@ public:
 	virtual void                  *CreateScriptObject(const asITypeInfo *type);
 	virtual void                  *CreateScriptObjectCopy(void *obj, const asITypeInfo *type);
 	virtual void                  *CreateUninitializedScriptObject(const asITypeInfo *type);
+	virtual asIScriptObject       *CreateShallowScriptObjectCopy(asIScriptObject *obj);
 	virtual asIScriptFunction     *CreateDelegate(asIScriptFunction *func, void *obj);
 	virtual int                    AssignScriptObject(void *dstObj, void *srcObj, const asITypeInfo *type);
 	virtual void                   ReleaseScriptObject(void *obj, const asITypeInfo *type);
@@ -191,6 +193,7 @@ public:
 	virtual asETokenClass ParseToken(const char *string, size_t stringLength = 0, asUINT *tokenLength = 0) const;
 
 	// Garbage collection
+	virtual int  ShareGarbageCollector(asIScriptEngine *owner);
 	virtual int  GarbageCollect(asDWORD flags = asGC_FULL_CYCLE, asUINT numIterations = 1);
 	virtual void GetGCStatistics(asUINT *currentSize, asUINT *totalDestroyed, asUINT *totalDetected, asUINT *newObjects, asUINT *totalNewDestroyed) const;
 	virtual int  NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type);
@@ -439,7 +442,9 @@ public:
 	mutable asCMap<int, asCTypeInfo*>       mapTypeIdToTypeInfo;
 
 	// Garbage collector
-	asCGarbageCollector gc;
+	// 定制：共享 GC 不改变脚本类、函数编号或模块的所属引擎。
+	std::shared_ptr<asCGarbageCollector> gc;
+	asCScriptEngine *gcOwner = 0;
 
 	// Dynamic groups
 	asCConfigGroup             defaultGroup;
@@ -495,6 +500,9 @@ public:
 
 	// Synchronization for threads
 	DECLAREREADWRITELOCK(mutable engineRWLock)
+	// Java 共享 GC 可从另一个引擎的线程读取行为、类型或执行析构函数；
+	// 每个引擎独立保护这些操作与编译/注册，独立引擎仍可并行编译。
+	mutable std::recursive_mutex gcMetadataMutex;
 
 	// Engine properties
 	struct

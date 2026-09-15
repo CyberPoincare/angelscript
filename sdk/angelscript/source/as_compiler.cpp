@@ -3499,8 +3499,11 @@ bool asCCompiler::CompileInitializationWithAssignment(asCByteCode* bc, const asC
 	// If the rexpr is already a temporary value of the same type, then it should be used directly without making a copy
 	// TODO: This can probably be done for local variables as well
 	// TODO: For value types, stored inline the rexpr would have to be compiled already to initialize the value so the following cannot be used
+	// 项目定制：asOBJ_ASHANDLE 的 dictionaryValue/ref 虽支持句柄语法，仍是原生值对象。
+	// 不能用 REFCPY 把栈上临时对象的地址存入成员/全局；它们须走下方构造和赋值行为。
 	if ((isVarGlobOrMem == asVGM_MEMBER || isVarGlobOrMem == asVGM_GLOBAL) &&
-		rexpr->type.isTemporary && type.GetTypeInfo() == rexpr->type.dataType.GetTypeInfo() && type.IsObject() && (type.IsObjectHandle() || type.SupportHandles()))
+		rexpr->type.isTemporary && type.GetTypeInfo() == rexpr->type.dataType.GetTypeInfo() && type.IsObject() &&
+		!(type.GetTypeInfo()->flags & asOBJ_ASHANDLE) && (type.IsObjectHandle() || type.SupportHandles()))
 	{
 		// Add the rexpr to the bytecode
 		if( !(type.GetTypeInfo()->flags & asOBJ_SCOPED) )
@@ -17916,6 +17919,14 @@ void asCCompiler::PerformFunctionCall(int funcId, asCExprContext *ctx, bool isCo
 	}
 	else if (descr)
 	{
+		// Starsector：显式 Base::method() 不能绕过虚调用调用抽象方法体。
+		if (descr->funcType == asFUNC_INTERFACE && descr->objectType && !descr->objectType->IsInterface())
+		{
+			asCString message;
+			message.Format(TXT_MISSING_IMPLEMENTATION_OF_s, descr->GetDeclaration());
+			Error(message, ctx->exprNode);
+			return;
+		}
 		if (descr->objectType)
 			argSize += AS_PTR_SIZE;
 
@@ -18599,4 +18610,3 @@ void asCExprContext::Merge(asCExprContext *after)
 END_AS_NAMESPACE
 
 #endif // AS_NO_COMPILER
-

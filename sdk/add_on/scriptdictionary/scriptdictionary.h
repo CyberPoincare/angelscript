@@ -27,6 +27,8 @@ END_AS_NAMESPACE
 // TODO: memory: The map allocator should use the asAllocMem and asFreeMem
 #if AS_CAN_USE_CPP11
 #include <unordered_map>
+#include <memory>
+#include <utility>
 typedef std::unordered_map<dictKey_t, AS_NAMESPACE_QUALIFIER CScriptDictValue> dictMap_t;
 #else
 #include <map>
@@ -94,6 +96,11 @@ public:
 	// Returns the type id of the stored value
 	int  GetTypeId() const;
 
+	// 项目定制：宿主将基本值承接为 Java 包装对象时，复制字典值仍保留同一对象身份。
+	// 此元数据不持有 AS 对象；游戏字段和装箱规则由宿主实现。
+	const std::shared_ptr<void>& GetObjectIdentity() const { return m_objectIdentity; }
+	void SetObjectIdentity(std::shared_ptr<void> identity) { m_objectIdentity = std::move(identity); }
+
 	// Free the stored value
 	void FreeValue();
 
@@ -112,6 +119,7 @@ protected:
 	};
 	asIScriptEngine* m_engine;
 	int m_typeId;
+	std::shared_ptr<void> m_objectIdentity;
 };
 
 class CScriptDictionary

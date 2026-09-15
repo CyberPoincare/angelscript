@@ -1545,7 +1545,7 @@ int asCContext::Execute()
 
 	asUINT gcPreObjects = 0;
 	if( m_engine->ep.autoGarbageCollect )
-		m_engine->gc.GetStatistics(&gcPreObjects, 0, 0, 0, 0);
+		m_engine->gc->GetStatistics(&gcPreObjects, 0, 0, 0, 0);
 
 	while (m_status == asEXECUTION_ACTIVE)
 	{
@@ -1572,7 +1572,7 @@ int asCContext::Execute()
 	if( m_engine->ep.autoGarbageCollect )
 	{
 		asUINT gcPosObjects = 0;
-		m_engine->gc.GetStatistics(&gcPosObjects, 0, 0, 0, 0);
+		m_engine->gc->GetStatistics(&gcPosObjects, 0, 0, 0, 0);
 		if( gcPosObjects > gcPreObjects )
 		{
 			// Execute as many steps as there were new objects created
@@ -5495,6 +5495,13 @@ bool asCContext::CleanStackFrame(bool catchException)
 			// If the exception was caught, then only clean up objects within the try block
 			if (exceptionCaught)
 			{
+				// 项目定制：普通参数的生命周期属于整个函数，不能在进入本函数 catch 时销毁。
+				// 隐藏返回地址也是非正偏移，但返回对象可能已在 try 中构造，须按活对象标记清理。
+				bool isReturnVariable = m_currentFunction->DoesReturnOnStack() &&
+					pos == (m_currentFunction->objectType ? -AS_PTR_SIZE : 0);
+				if (pos <= 0 && !isReturnVariable)
+					continue;
+
 				// Find out where the variable was declared, and skip cleaning of those that were declared before the try catch
 				// Multiple variables in different scopes may occupy the same slot on the stack so it is necessary to search
 				// the entire list to determine which variable occupies the slot now.
@@ -5572,7 +5579,14 @@ bool asCContext::CleanStackFrame(bool catchException)
 
 					asSTypeBehaviour* beh = &CastToObjectType(m_currentFunction->scriptData->variables[n]->type.GetTypeInfo())->beh;
 					if( beh->destruct )
-						m_engine->CallObjectMethod((void*)(asPWORD*)&m_regs.stackFramePointer[-pos], beh->destruct);
+					{
+						// 项目定制：FinalizeFunction 将隐藏返回值登记为引用，栈槽保存实际返回对象地址。
+						// 返回表达式失败时已构造的返回对象须析构；不能把地址槽本身当作对象。
+						void *object = (void*)(asPWORD*)&m_regs.stackFramePointer[-pos];
+						if (m_currentFunction->scriptData->variables[n]->type.IsReference())
+							object = *(void**)object;
+						m_engine->CallObjectMethod(object, beh->destruct);
+					}
 				}
 			}
 		}
@@ -5849,12 +5863,14 @@ int asCContext::CallGeneric(asCScriptFunction *descr)
 
 	m_callingSystemFunction = descr;
 #ifdef AS_NO_EXCEPTIONS
+	if( descr->initializationCallback ) descr->initializationCallback(descr->initializationParameter);
 	func(&gen);
 #else
 	// This try/catch block is to catch potential exception that may
 	// be thrown by the registered function.
 	try
 	{
+		if( descr->initializationCallback ) descr->initializationCallback(descr->initializationParameter);
 		func(&gen);
 	}
 	catch (...)
@@ -6860,5 +6876,3 @@ asQWORD as_powu64(asQWORD base, asQWORD exponent, bool& isOverflow)
 }
 
 END_AS_NAMESPACE
-
-

@@ -381,7 +381,7 @@ asCScriptFunction::asCScriptFunction(asCScriptEngine *engine, asCModule *mod, as
 
 	// Notify the GC of delegates
 	if( funcType == asFUNC_DELEGATE )
-		engine->gc.AddScriptObjectToGC(this, &engine->functionBehaviours);
+		engine->gc->AddScriptObjectToGC(this, &engine->functionBehaviours);
 }
 
 void asCScriptFunction::AllocateScriptFunctionData()
@@ -1724,6 +1724,14 @@ asDWORD *asCScriptFunction::GetByteCode(asUINT *length)
 }
 
 // interface
+int asCScriptFunction::SetInitializationCallback(void (*callback)(void *), void *parameter)
+{
+	if( funcType != asFUNC_SYSTEM ) return asNOT_SUPPORTED;
+	initializationCallback = callback;
+	initializationParameter = parameter;
+	return asSUCCESS;
+}
+
 void *asCScriptFunction::SetUserData(void *data, asPWORD type)
 {
 	// As a thread might add a new new user data at the same time as another
@@ -2027,4 +2035,3 @@ asITypeInfo* asCScriptFunction::GetSubType(asUINT subtypeIndex) const
 }
 
 END_AS_NAMESPACE
-

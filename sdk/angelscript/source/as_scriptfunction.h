@@ -114,7 +114,8 @@ enum asEFuncTrait
 	asTRAIT_EXPLICIT    = 1<<9,  // method
 	asTRAIT_PROPERTY    = 1<<10, // method/function
 	asTRAIT_DELETED     = 1<<11, // method
-	asTRAIT_VARIADIC    = 1<<12  // method/function
+	asTRAIT_VARIADIC    = 1<<12, // method/function
+	asTRAIT_ABSTRACT_DECL = 1<<13 // Starsector：编译期抽象声明；运行期由无方法体的函数类型保留
 };
 
 struct asSFunctionTraits
@@ -224,6 +225,9 @@ public:
 	// User data
 	void                *SetUserData(void *userData, asPWORD type);
 	void                *GetUserData(asPWORD type) const;
+	int                  SetInitializationCallback(void (*callback)(void *), void *parameter);
+	void               (*initializationCallback)(void *) = 0;
+	void                *initializationParameter = 0;
 
 public:
 	//-----------------------------------

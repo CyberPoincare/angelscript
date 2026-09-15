@@ -1309,7 +1309,7 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 				}
 
 				if (addToGC && !addToModule)
-					engine->gc.AddScriptObjectToGC(func, &engine->functionBehaviours);
+					engine->gc->AddScriptObjectToGC(func, &engine->functionBehaviours);
 
 				ReadByteCode(func);
 

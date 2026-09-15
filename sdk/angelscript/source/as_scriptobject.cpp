@@ -332,7 +332,7 @@ void ScriptObject_ConstructUnitialized(asCObjectType *objType, asCScriptObject *
 	new(self) asCScriptObject(objType, false);
 }
 
-asCScriptObject::asCScriptObject(asCObjectType *ot, bool doInitialize)
+asCScriptObject::asCScriptObject(asCObjectType *ot, bool doInitialize, bool allocateMembers)
 {
 	refCount.set(1);
 	objType = ot;
@@ -343,11 +343,14 @@ asCScriptObject::asCScriptObject(asCObjectType *ot, bool doInitialize)
 
 	// Notify the garbage collector of this object
 	if( objType->flags & asOBJ_GC )
-		objType->engine->gc.AddScriptObjectToGC(this, objType);
+		objType->engine->gc->AddScriptObjectToGC(this, objType);
 
 	// Initialize members to zero. Technically we only need to zero the pointer
 	// members, but just the memset is faster than having to loop and check the datatypes
 	memset((void*)(this+1), 0, objType->size - sizeof(asCScriptObject));
+
+	// 项目定制：浅克隆的各成员由源对象初始化，不能先执行引用类型的默认 factory。
+	if (!allocateMembers) return;
 
 	if( doInitialize )
 	{
@@ -661,6 +664,7 @@ int asCScriptObject::Release() const
 
 void asCScriptObject::CallDestructor()
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(objType->engine->gcMetadataMutex);
 	// Only allow the destructor to be called once
 	if( isDestructCalled ) return;
 
@@ -1062,6 +1066,53 @@ int asCScriptObject::CopyFrom(const asIScriptObject *other)
 
 	*this = *(const asCScriptObject*)other;
 
+	return asSUCCESS;
+}
+
+// 项目定制：仅做 Java Object.clone 所需的字段浅复制，不进入脚本复制运算符。
+// Java 对象落在 AS 引用类型时共享引用；AS 原生值包装器按自身值语义复制。
+int asCScriptObject::ShallowCopyFrom(const asCScriptObject *other)
+{
+	asASSERT(other && other->objType == objType);
+	asCScriptEngine *engine = objType->engine;
+	for (asUINT n = 0; n < objType->properties.GetLength(); ++n)
+	{
+		asCObjectProperty *prop = objType->properties[n];
+		void *dst = reinterpret_cast<char*>(this) + prop->byteOffset;
+		void *src = const_cast<char*>(reinterpret_cast<const char*>(other)) + prop->byteOffset;
+		if (prop->type.IsObject())
+		{
+			asCObjectType *type = CastToObjectType(prop->type.GetTypeInfo());
+			if (type->flags & asOBJ_REF)
+			{
+				// 包括未写 @ 的 AS 引用成员；其 Java 对象仍须共享。
+				void *value = *reinterpret_cast<void**>(src);
+				*reinterpret_cast<void**>(dst) = value;
+				if (value) engine->AddRefScriptObject(value, type);
+			}
+			else if (prop->type.IsReference())
+			{
+				void *value = *reinterpret_cast<void**>(src);
+				if (value)
+				{
+					*reinterpret_cast<void**>(dst) = engine->CreateScriptObjectCopy(value, type);
+					if (!*reinterpret_cast<void**>(dst)) { isDestructCalled = true; return asERROR; }
+				}
+			}
+			else
+			{
+				asASSERT(type->flags & asOBJ_POD);
+				memcpy(dst, src, prop->type.GetSizeInMemoryBytes());
+			}
+		}
+		else if (prop->type.IsFuncdef())
+		{
+			asCScriptFunction *value = *reinterpret_cast<asCScriptFunction**>(src);
+			*reinterpret_cast<asCScriptFunction**>(dst) = value;
+			if (value) value->AddRef();
+		}
+		else memcpy(dst, src, prop->type.GetSizeInMemoryBytes());
+	}
 	return asSUCCESS;
 }
 

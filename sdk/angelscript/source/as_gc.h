@@ -44,6 +44,7 @@
 #include "as_array.h"
 #include "as_map.h"
 #include "as_thread.h"
+#include <mutex>
 
 BEGIN_AS_NAMESPACE
 
@@ -62,7 +63,10 @@ public:
 	int    AddScriptObjectToGC(void *obj, asCObjectType *objType);
 	int    GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, asITypeInfo **type);
 
-	int    ReportAndReleaseUndestroyedObjects();
+	int    ReportAndReleaseUndestroyedObjects(asCScriptEngine *closingEngine);
+	bool   EnterEngineShutdown(asCScriptEngine *closingEngine);
+	void   LeaveEngineShutdown();
+	void   DrainDeferredShutdowns();
 
 	asCScriptEngine *engine;
 
@@ -140,10 +144,13 @@ protected:
 	asSMapNode_t            *GetNode(void *obj, asSIntTypePair it);
 	void                     ReturnNode(asSMapNode_t *node);
 	asCArray<asSMapNode_t*>  freeNodes;
+	// GC 回调可释放最后一个运行时；本次遍历退出后才允许卸载它的类型。
+	asCArray<asCScriptEngine*> deferredShutdowns;
 
 	// Critical section for multithreaded access
 	DECLARECRITICALSECTION(gcCritical)   // Used for adding/removing objects
-	DECLARECRITICALSECTION(gcCollecting) // Used for processing
+	// Java 桥：关闭阶段在同一线程再次执行 GC；跨线程仍只能尝试进入，不能等待原生字段锁。
+	std::recursive_mutex gcCollecting;
 };
 
 END_AS_NAMESPACE

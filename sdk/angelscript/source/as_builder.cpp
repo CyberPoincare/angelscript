@@ -3659,6 +3659,14 @@ void asCBuilder::CompileClasses(asUINT numTempl)
 				}
 			}
 
+			// 纯虚声明也保存所属类的虚槽编号，供字节码签名和跨模块恢复使用。
+			for (asUINT j = 0; j < ot->virtualFunctionTable.GetLength(); ++j)
+			{
+				asCScriptFunction *method = ot->virtualFunctionTable[j];
+				if (method->funcType == asFUNC_INTERFACE && method->objectType == ot)
+					method->vfTableIdx = int(j);
+			}
+
 			// Make virtual function table chunks for each implemented interface
 			for( asUINT m = 0; m < ot->interfaces.GetLength(); m++ )
 			{
@@ -3803,10 +3811,6 @@ void asCBuilder::CompileClasses(asUINT numTempl)
 	// TODO: Warn if a method overrides a base method without marking it as 'override'.
 	//       It must be possible to turn off this warning through engine property.
 
-	// TODO: A base class should be able to mark a method as 'abstract'. This will
-	//       allow a base class to provide a partial implementation, but still force
-	//       derived classes to implement specific methods.
-
 	// Verify that all interface methods are implemented in the classes
 	// We do this here so the base class' methods have already been inherited
 	for( n = 0; n < classDeclarations.GetLength(); n++ )
@@ -3839,6 +3843,23 @@ void asCBuilder::CompileClasses(asUINT numTempl)
 				}
 				else
 					overrideValidations[overrideIndex] = true;
+			}
+		}
+
+		// 纯虚槽可在抽象中间类中继续继承；具体类必须提供最终实现。
+		if (!(ot->flags & asOBJ_ABSTRACT))
+		{
+			for (asUINT j = 0; j < ot->methods.GetLength(); ++j)
+			{
+				asCScriptFunction *method = GetFunctionDescription(ot->methods[j]);
+				if (method->funcType == asFUNC_VIRTUAL)
+					method = ot->virtualFunctionTable[method->vfTableIdx];
+				if (method->funcType == asFUNC_INTERFACE && !method->objectType->IsInterface())
+				{
+					asCString message;
+					message.Format(TXT_MISSING_IMPLEMENTATION_OF_s, method->GetDeclaration());
+					WriteError(message, decl->script, decl->node);
+				}
 			}
 		}
 
@@ -5108,6 +5129,8 @@ void asCBuilder::GetParsedFunctionDetails(asCScriptNode *node, asCScriptCode *fi
 				funcTraits.SetTrait(asTRAIT_PROPERTY, true);
 			else if (file->TokenEquals(decorator->tokenPos, decorator->tokenLength, DELETE_TOKEN))
 				funcTraits.SetTrait(asTRAIT_DELETED, true);
+			else if (file->TokenEquals(decorator->tokenPos, decorator->tokenLength, ABSTRACT_TOKEN))
+				funcTraits.SetTrait(asTRAIT_ABSTRACT_DECL, true);
 			else
 			{
 				asCString msg(&file->code[decorator->tokenPos], decorator->tokenLength);
@@ -5458,6 +5481,24 @@ int asCBuilder::RegisterScriptFunction(asCScriptNode *node, asCScriptCode *file,
 		node->Destroy(engine);
 
 		return 0;
+	}
+
+	// Starsector Java→AS 兼容：抽象类中的无方法体声明保留为纯虚方法，
+	// 使用已有接口函数描述保存签名，不能生成返回默认值的替代函数体。
+	const bool abstractDeclaration = funcTraits.GetTrait(asTRAIT_ABSTRACT_DECL);
+	const bool isAbstractMethod = abstractDeclaration && !isInterface && objType && !isMixin &&
+		!funcTraits.GetTrait(asTRAIT_EXTERNAL) && !funcTraits.GetTrait(asTRAIT_CONSTRUCTOR) &&
+		!funcTraits.GetTrait(asTRAIT_DESTRUCTOR);
+	if (abstractDeclaration && !isAbstractMethod)
+		WriteError("Abstract declaration is only valid for a class method", file, node);
+	if (isAbstractMethod)
+	{
+		if (!(objType->flags & asOBJ_ABSTRACT) || funcTraits.GetTrait(asTRAIT_PRIVATE) ||
+			funcTraits.GetTrait(asTRAIT_FINAL))
+			WriteError("Abstract method requires an abstract class and cannot be private or final", file, node);
+		if (!node || !node->lastChild || node->lastChild->tokenType != ttEndStatement)
+			WriteError("Abstract method cannot have an implementation", file, node);
+		isInterface = true;
 	}
 
 	isExistingShared = false;

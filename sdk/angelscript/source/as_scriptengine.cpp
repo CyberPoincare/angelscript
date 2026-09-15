@@ -710,7 +710,9 @@ asCScriptEngine::asCScriptEngine()
 		ep.foreachSupport                = true;
 	}
 
-	gc.engine = this;
+	gc = std::shared_ptr<asCGarbageCollector>(asNEW(asCGarbageCollector),
+        [](asCGarbageCollector *collector) { asDELETE(collector, asCGarbageCollector); });
+	gc->engine = this;
 	tok.engine = this;
 
 	refCount.set(1);
@@ -773,6 +775,7 @@ asCScriptEngine::asCScriptEngine()
 
 void asCScriptEngine::DeleteDiscardedModules()
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// TODO: redesign: Prevent more than one thread from entering this function at the same time.
 	//                 If a thread is already doing the work for the clean-up the other thread should
 	//                 simply return, as the first thread will continue.
@@ -971,6 +974,7 @@ asCScriptEngine::~asCScriptEngine()
 		asDELETE(nameSpaces[n], asSNameSpace);
 	nameSpaces.SetLength(0);
 
+	if( gcOwner ) gcOwner->Release();
 	asCThreadManager::Unprepare();
 }
 
@@ -1128,6 +1132,9 @@ int asCScriptEngine::Release() const
 // interface
 int asCScriptEngine::ShutDownAndRelease()
 {
+	// Java 桥：GC 回调释放运行时期间，类型必须活到当前图遍历结束。
+	const std::shared_ptr<asCGarbageCollector> collector = gc;
+	if( !collector->EnterEngineShutdown(this) ) return refCount.get();
 	// Do a full garbage collection cycle to clean up any object that may still hold on to the engine
 	GarbageCollect();
 
@@ -1159,7 +1166,8 @@ int asCScriptEngine::ShutDownAndRelease()
 	// If the application hasn't registered GC behaviours for all types
 	// that can form circular references with script types, then there
 	// may still be objects in the GC.
-	gc.ReportAndReleaseUndestroyedObjects();
+	gc->ReportAndReleaseUndestroyedObjects(this);
+	collector->LeaveEngineShutdown();
 
 	// Release the engine reference
 	return Release();
@@ -1659,6 +1667,7 @@ asCString asCScriptEngine::GetFunctionDeclaration(int funcId)
 // internal
 asCScriptFunction *asCScriptEngine::GetScriptFunction(int funcId) const
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( funcId < 0 || funcId >= (int)scriptFunctions.GetLength() )
 		return 0;
 
@@ -1691,6 +1700,7 @@ int asCScriptEngine::CreateContext(asIScriptContext **context, bool isInternal)
 // interface
 int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declaration, int byteOffset, int compositeOffset, bool isCompositeIndirect)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	int r;
 	asCDataType dt;
 	asCBuilder bld(this, 0);
@@ -1762,6 +1772,7 @@ int asCScriptEngine::RegisterObjectProperty(const char *obj, const char *declara
 // interface
 int asCScriptEngine::RegisterInterface(const char *name)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( name == 0 ) return ConfigError(asINVALID_NAME, "RegisterInterface", 0, 0);
 
 	// Verify if the name has been registered as a type already
@@ -1824,6 +1835,7 @@ int asCScriptEngine::RegisterInterface(const char *name)
 // interface
 int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *declaration)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// Verify that the correct config group is set.
 	if( currentGroup->FindType(intf) == 0 )
 		return ConfigError(asWRONG_CONFIG_GROUP, "RegisterInterfaceMethod", intf, declaration);
@@ -1903,6 +1915,7 @@ asCTypeInfo* asCScriptEngine::GetTemplateSubTypeByName(const asCString &name)
 
 int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD flags)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	int r;
 
 	isPrepared = false; // TODO: Only set this after the validations have been completed, to avoid unnecessary Prepare in case no change was made
@@ -2187,6 +2200,7 @@ int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD 
 // interface
 int asCScriptEngine::RegisterObjectBehaviour(const char *datatype, asEBehaviours behaviour, const char *decl, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( datatype == 0 ) return ConfigError(asINVALID_ARG, "RegisterObjectBehaviour", datatype, decl);
 
 	// Determine the object type
@@ -2217,6 +2231,7 @@ int asCScriptEngine::RegisterObjectBehaviour(const char *datatype, asEBehaviours
 // internal
 int asCScriptEngine::RegisterBehaviourToObjectType(asCObjectType *objectType, asEBehaviours behaviour, const char *decl, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterObjectBehaviour", objectType->name.AddressOf(), decl);
@@ -2815,6 +2830,7 @@ int asCScriptEngine::AddBehaviourFunction(asCScriptFunction &func, asSSystemFunc
 // interface
 int asCScriptEngine::RegisterGlobalProperty(const char *declaration, void *pointer)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// Don't accept a null pointer
 	if( pointer == 0 )
 		return ConfigError(asINVALID_ARG, "RegisterGlobalProperty", declaration, 0);
@@ -2980,6 +2996,7 @@ int asCScriptEngine::GetGlobalPropertyIndexByDecl(const char *decl) const
 // interface
 int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( obj == 0 )
 		return ConfigError(asINVALID_ARG, "RegisterObjectMethod", obj, declaration);
 
@@ -3010,6 +3027,7 @@ int asCScriptEngine::RegisterObjectMethod(const char *obj, const char *declarati
 // internal
 int asCScriptEngine::RegisterMethodToObjectType(asCObjectType *objectType, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary, int compositeOffset, bool isCompositeIndirect)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterObjectMethod", objectType->name.AddressOf(), declaration);
@@ -3175,6 +3193,7 @@ int asCScriptEngine::RegisterMethodToObjectType(asCObjectType *objectType, const
 // interface
 int asCScriptEngine::RegisterGlobalFunction(const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 #ifdef AS_MAX_PORTABILITY
 	if( callConv != asCALL_GENERIC )
 		return ConfigError(asNOT_SUPPORTED, "RegisterGlobalFunction", declaration, 0);
@@ -3575,6 +3594,7 @@ int asCScriptEngine::ConfigError(int err, const char *funcName, const char *arg1
 // interface
 int asCScriptEngine::RegisterDefaultArrayType(const char *type)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	asCBuilder bld(this, 0);
 	asCDataType dt;
 	int r = bld.ParseDataType(type, &dt, defaultNamespace);
@@ -3602,6 +3622,7 @@ int asCScriptEngine::GetDefaultArrayTypeId() const
 // interface
 int asCScriptEngine::RegisterStringFactory(const char *datatype, asIStringFactory *factory)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// TODO: Add check to prohibit registering a new factory if one already is registered
 	//       This is because the engine keeps references to strings in the factory, and 
 	//       won't be able to handle it if the string factory is replaced
@@ -3725,6 +3746,7 @@ int asCScriptEngine::RequestBuild()
 	}
 	isBuilding = true;
 	RELEASEEXCLUSIVE(engineRWLock);
+	gcMetadataMutex.lock();
 
 	return 0;
 }
@@ -3735,7 +3757,10 @@ void asCScriptEngine::BuildCompleted()
 	// Always free up pooled memory after a completed build
 	memoryMgr.FreeUnusedMemory();
 
+	ACQUIREEXCLUSIVE(engineRWLock);
 	isBuilding = false;
+	RELEASEEXCLUSIVE(engineRWLock);
+	gcMetadataMutex.unlock();
 }
 
 void asCScriptEngine::RemoveTemplateInstanceType(asCObjectType *t)
@@ -4490,7 +4515,7 @@ asCFuncdefType *asCScriptEngine::GenerateFuncdefForTemplateObjectInstance(asCObj
 
 void asCScriptEngine::CallObjectMethod(void *obj, int func) const
 {
-	asCScriptFunction *s = scriptFunctions[func];
+	asCScriptFunction *s = GetScriptFunction(func);
 	asASSERT( s != 0 );
 	CallObjectMethod(obj, s->sysFuncIntf, s);
 }
@@ -4617,7 +4642,7 @@ void asCScriptEngine::CallObjectMethod(void *obj, asSSystemFunctionInterface *i,
 
 bool asCScriptEngine::CallObjectMethodRetBool(void *obj, int func) const
 {
-	asCScriptFunction *s = scriptFunctions[func];
+	asCScriptFunction *s = GetScriptFunction(func);
 	asASSERT( s != 0 );
 	asSSystemFunctionInterface *i = s->sysFuncIntf;
 
@@ -4696,7 +4721,7 @@ bool asCScriptEngine::CallObjectMethodRetBool(void *obj, int func) const
 
 int asCScriptEngine::CallObjectMethodRetInt(void *obj, int func) const
 {
-	asCScriptFunction *s = scriptFunctions[func];
+	asCScriptFunction *s = GetScriptFunction(func);
 	asASSERT( s != 0 );
 	asSSystemFunctionInterface *i = s->sysFuncIntf;
 
@@ -4775,7 +4800,7 @@ int asCScriptEngine::CallObjectMethodRetInt(void *obj, int func) const
 
 void *asCScriptEngine::CallObjectMethodRetPtr(void *obj, int func) const
 {
-	asCScriptFunction *s = scriptFunctions[func];
+	asCScriptFunction *s = GetScriptFunction(func);
 	asASSERT( s != 0 );
 	asSSystemFunctionInterface *i = s->sysFuncIntf;
 
@@ -4994,7 +5019,7 @@ void *asCScriptEngine::CallGlobalFunctionRetPtr(asSSystemFunctionInterface *i, a
 
 void asCScriptEngine::CallObjectMethod(void *obj, void *param, int func) const
 {
-	asCScriptFunction *s = scriptFunctions[func];
+	asCScriptFunction *s = GetScriptFunction(func);
 	asASSERT( s != 0 );
 	CallObjectMethod(obj, param, s->sysFuncIntf, s);
 }
@@ -5175,19 +5200,36 @@ void asCScriptEngine::CallFree(void *obj) const
 // interface
 int asCScriptEngine::NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type)
 {
-	return gc.AddScriptObjectToGC(obj, static_cast<asCObjectType*>(type));
+	return gc->AddScriptObjectToGC(obj, static_cast<asCObjectType*>(type));
 }
 
 // interface
 int asCScriptEngine::GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, asITypeInfo **type)
 {
-	return gc.GetObjectInGC(idx, seqNbr, obj, type);
+	return gc->GetObjectInGC(idx, seqNbr, obj, type);
+}
+
+// 定制：只共享引用图；行为编号始终由对象所属引擎解释。
+int asCScriptEngine::ShareGarbageCollector(asIScriptEngine *owner)
+{
+    if( !owner ) return asINVALID_ARG;
+    asCScriptEngine *other = static_cast<asCScriptEngine*>(owner);
+    if( gc == other->gc ) return asSUCCESS;
+    asUINT count = 0;
+    gc->GetStatistics(&count, 0, 0, 0, 0);
+    if( count != 0 || gcOwner || shuttingDown ) return asINVALID_CONFIGURATION;
+    gc = other->gc;
+    gcOwner = gc->engine;
+    gcOwner->AddRef();
+    return asSUCCESS;
 }
 
 // interface
 int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 {
-	int r = gc.GarbageCollect(flags, iterations);
+	AddRef();
+	const std::shared_ptr<asCGarbageCollector> collector = gc;
+	int r = collector->GarbageCollect(flags, iterations);
 
 	if( r == 0 )
 	{
@@ -5196,19 +5238,21 @@ int asCScriptEngine::GarbageCollect(asDWORD flags, asUINT iterations)
 		DeleteDiscardedModules();
 	}
 
+	collector->DrainDeferredShutdowns();
+	Release();
 	return r;
 }
 
 // interface
 void asCScriptEngine::GetGCStatistics(asUINT *currentSize, asUINT *totalDestroyed, asUINT *totalDetected, asUINT *newObjects, asUINT *totalNewDestroyed) const
 {
-	gc.GetStatistics(currentSize, totalDestroyed, totalDetected, newObjects, totalNewDestroyed);
+	gc->GetStatistics(currentSize, totalDestroyed, totalDetected, newObjects, totalNewDestroyed);
 }
 
 // interface
 void asCScriptEngine::GCEnumCallback(void *reference)
 {
-	gc.GCEnumCallback(reference);
+	gc->GCEnumCallback(reference);
 }
 
 // interface
@@ -5234,8 +5278,8 @@ void asCScriptEngine::ForwardGCReleaseReferences(void *ref, asITypeInfo *type)
 // interface
 void asCScriptEngine::SetCircularRefDetectedCallback(asCIRCULARREFFUNC_t callback, void *param)
 {
-	gc.circularRefDetectCallbackFunc  = callback;
-	gc.circularRefDetectCallbackParam = param;
+	gc->circularRefDetectCallbackFunc  = callback;
+	gc->circularRefDetectCallbackParam = param;
 }
 
 int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
@@ -5366,6 +5410,7 @@ void asCScriptEngine::RemoveFromTypeIdMap(asCTypeInfo *type)
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoByDecl(const char *decl) const
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	asCDataType dt;
 	// This cast is ok, because we are not changing anything in the engine
 	asCBuilder bld(const_cast<asCScriptEngine*>(this), 0);
@@ -5651,6 +5696,7 @@ void *asCScriptEngine::CreateScriptObject(const asITypeInfo *type)
 // internal
 int asCScriptEngine::CallScriptObjectMethod(void *obj, int funcId)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	asIScriptContext *ctx = 0;
 	int r = 0;
 	bool isNested = false;
@@ -5752,6 +5798,23 @@ void *asCScriptEngine::CreateUninitializedScriptObject(const asITypeInfo *type)
 	ScriptObject_ConstructUnitialized(objType, obj);
 
 	return obj;
+}
+
+// 项目定制：Object.clone 由实际动态类型分配，完全跳过脚本构造与成员 factory。
+asIScriptObject *asCScriptEngine::CreateShallowScriptObjectCopy(asIScriptObject *origObj)
+{
+	if (!origObj || origObj->GetEngine() != this) return 0;
+	asCScriptObject *source = static_cast<asCScriptObject*>(origObj);
+	asCObjectType *type = source->objType;
+	if (!(type->flags & asOBJ_SCRIPT_OBJECT)) return 0;
+	asCScriptObject *copy = reinterpret_cast<asCScriptObject*>(CallAlloc(type));
+	new(copy) asCScriptObject(type, false, false);
+	if (copy->ShallowCopyFrom(source) < 0)
+	{
+		copy->Release();
+		return 0;
+	}
+	return copy;
 }
 
 // interface
@@ -6106,6 +6169,7 @@ asDWORD asCScriptEngine::SetDefaultAccessMask(asDWORD defaultMask)
 
 int asCScriptEngine::GetNextScriptFunctionId()
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// This function only returns the next function id that
 	// should be used. It doesn't update the internal arrays.
 	if( freeScriptFunctionIds.GetLength() )
@@ -6116,6 +6180,7 @@ int asCScriptEngine::GetNextScriptFunctionId()
 
 void asCScriptEngine::AddScriptFunction(asCScriptFunction *func)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// Update the internal arrays with the function id that is now used
 	if( freeScriptFunctionIds.GetLength() && freeScriptFunctionIds[freeScriptFunctionIds.GetLength()-1] == func->id )
 		freeScriptFunctionIds.PopLast();
@@ -6132,6 +6197,7 @@ void asCScriptEngine::AddScriptFunction(asCScriptFunction *func)
 
 void asCScriptEngine::RemoveScriptFunction(asCScriptFunction *func)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( func == 0 || func->id < 0 ) return;
 	int id = func->id & ~FUNC_IMPORTED;
 	if( func->funcType == asFUNC_IMPORTED )
@@ -6205,6 +6271,7 @@ void asCScriptEngine::RemoveFuncdef(asCFuncdefType *funcdef)
 // interface
 int asCScriptEngine::RegisterFuncdef(const char *decl)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( decl == 0 ) return ConfigError(asINVALID_ARG, "RegisterFuncdef", decl, 0);
 
 	// Parse the function declaration
@@ -6349,6 +6416,7 @@ asCFuncdefType *asCScriptEngine::FindMatchingFuncdef(asCScriptFunction *func, as
 // TODO: typedef: Accept complex types for the typedefs
 int asCScriptEngine::RegisterTypedef(const char *type, const char *decl)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( type == 0 ) return ConfigError(asINVALID_NAME, "RegisterTypedef", type, decl);
 
 	// Verify if the name has been registered as a type already
@@ -6439,6 +6507,7 @@ asITypeInfo *asCScriptEngine::GetTypedefByIndex(asUINT index) const
 // interface
 int asCScriptEngine::RegisterEnum(const char* typeName, const char* underlyingType)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	//	Check the name
 	if( NULL == typeName )
 		return ConfigError(asINVALID_NAME, "RegisterEnum", typeName, 0);
@@ -6505,6 +6574,7 @@ int asCScriptEngine::RegisterEnum(const char* typeName, const char* underlyingTy
 // interface
 int asCScriptEngine::RegisterEnumValue(const char *typeName, const char *valueName, asINT64 value)
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	// Verify that the correct config group is used
 	if( currentGroup->FindType(typeName) == 0 )
 		return ConfigError(asWRONG_CONFIG_GROUP, "RegisterEnumValue", typeName, valueName);
@@ -6673,6 +6743,7 @@ int asCScriptEngine::DetermineNameAndNamespace(const char *in_name, asSNameSpace
 // interface
 asITypeInfo *asCScriptEngine::GetTypeInfoById(int typeId) const
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	asCDataType dt = GetDataTypeFromTypeId(typeId);
 
 	// Is the type id valid?
@@ -6690,6 +6761,7 @@ int asCScriptEngine::GetLastFunctionId() const
 // interface
 asIScriptFunction *asCScriptEngine::GetFunctionById(int funcId) const
 {
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	return GetScriptFunction(funcId);
 }
 

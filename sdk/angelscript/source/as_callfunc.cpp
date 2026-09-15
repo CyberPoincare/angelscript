@@ -775,7 +775,10 @@ int CallSystemFunction(int id, asCContext *context)
 
 	context->m_callingSystemFunction = descr;
 	bool cppException = false;
+	bool nativeCallEntered = false;
 #ifdef AS_NO_EXCEPTIONS
+	if( descr->initializationCallback ) descr->initializationCallback(descr->initializationParameter);
+	nativeCallEntered = true;
 #ifndef RETURN_VALUE_MAX_SIZE
 	retQW[0] = CallSystemFunctionNative(context, descr, obj, args, sysFunc->hostReturnInMemory ? retPointer : 0, retQW[1], secondObj);
 #else
@@ -789,6 +792,8 @@ int CallSystemFunction(int id, asCContext *context)
 	// executed in case of an exception.
 	try
 	{
+		if( descr->initializationCallback ) descr->initializationCallback(descr->initializationParameter);
+		nativeCallEntered = true;
 #ifndef RETURN_VALUE_MAX_SIZE
 		retQW[0] = CallSystemFunctionNative(context, descr, obj, args, sysFunc->hostReturnInMemory ? retPointer : 0, retQW[1], secondObj);
 #else
@@ -964,7 +969,8 @@ int CallSystemFunction(int id, asCContext *context)
 				asASSERT( clean->op == 1 || clean->op == 2 );
 				asASSERT( *addr );
 
-				if( clean->op == 2 )
+				// 初始化失败时尚未进入 C++ 被调函数，值实参仍由 VM 析构。
+				if( clean->op == 2 || (clean->op == 1 && !nativeCallEntered) )
 					engine->CallObjectMethod(*addr, clean->ot->beh.destruct);
 
 				engine->CallFree(*addr);
@@ -978,4 +984,3 @@ int CallSystemFunction(int id, asCContext *context)
 #endif // AS_MAX_PORTABILITY
 
 END_AS_NAMESPACE
-

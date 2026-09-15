@@ -647,6 +647,7 @@ CScriptDictValue::CScriptDictValue(const CScriptDictValue &other)
 #if AS_CAN_USE_CPP11
 CScriptDictValue::CScriptDictValue(CScriptDictValue &&other) noexcept
 {
+	m_objectIdentity = std::move(other.m_objectIdentity);
 	if( other.m_typeId & asTYPEID_MASK_OBJECT )
 		m_valueObj = other.m_valueObj;
 	else
@@ -693,6 +694,7 @@ CScriptDictValue &CScriptDictValue::operator=(CScriptDictValue &&other) noexcept
 		return *this;
 
 	FreeValue();
+	m_objectIdentity = std::move(other.m_objectIdentity);
 	if( other.m_typeId & asTYPEID_MASK_OBJECT )
 		m_valueObj = other.m_valueObj;
 	else
@@ -707,6 +709,7 @@ CScriptDictValue &CScriptDictValue::operator=(CScriptDictValue &&other) noexcept
 
 void CScriptDictValue::FreeValue()
 {
+	m_objectIdentity.reset();
 	// If it is a handle or a ref counted object, call release
 	if( m_typeId & asTYPEID_MASK_OBJECT )
 	{
@@ -771,6 +774,7 @@ void CScriptDictValue::Set(void *value, int typeId)
 
 void CScriptDictValue::Set(CScriptDictValue &value)
 {
+	if( this == &value ) return;
 	// Java Object 桥允许没有 engine 的原生空盒；接收对象继续保有自己的 engine。
 	// 空值没有脚本类型或引用，不能因跨宿主空值赋值触发 engine 断言。
 	if( value.m_typeId == 0 )
@@ -787,6 +791,7 @@ void CScriptDictValue::Set(CScriptDictValue &value)
 		Set((void*)value.m_valueObj, value.m_typeId);
 	else
 		Set((void*)&value.m_valueInt, value.m_typeId);
+	m_objectIdentity = value.m_objectIdentity;
 }
 
 // This overloaded method is implemented so that all integer and
@@ -1480,4 +1485,3 @@ void RegisterScriptDictionary_Generic(asIScriptEngine *engine)
 }
 
 END_AS_NAMESPACE
-

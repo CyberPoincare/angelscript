@@ -103,7 +103,7 @@ public:
 //====================================
 // Internal
 //====================================
-	asCScriptObject(asCObjectType *objType, bool doInitialize = true);
+	asCScriptObject(asCObjectType *objType, bool doInitialize = true, bool allocateMembers = true);
 	virtual ~asCScriptObject();
 
 	asCScriptObject &operator=(const asCScriptObject &other);
@@ -122,6 +122,7 @@ public:
 	void CopyObject(const void *src, void *dst, asCObjectType *objType, asCScriptEngine *engine);
 	void CopyHandle(asPWORD *src, asPWORD *dst, asCObjectType *objType, asCScriptEngine *engine);
 	int  CopyFromAs(const asCScriptObject *other, asCObjectType *objType);
+	int  ShallowCopyFrom(const asCScriptObject *other);
 
 	void CallDestructor();
 

@@ -83,17 +83,17 @@ int asCGarbageCollector::AddScriptObjectToGC(void *obj, asCObjectType *objType)
 		return asINVALID_ARG;
 	}
 
-	engine->CallObjectMethod(obj, objType->beh.addref);
+	objType->engine->CallObjectMethod(obj, objType->beh.addref);
 	asSObjTypePair ot = {obj, objType, 0};
 
 	// Invoke the garbage collector to destroy a little garbage as new comes in
 	// This will maintain the number of objects in the GC at a maintainable level without
 	// halting the application, and without burdening the application with manually invoking the 
 	// garbage collector.
-	if( engine->ep.autoGarbageCollect && gcNewObjects.GetLength() )
+	if( objType->engine->ep.autoGarbageCollect && gcNewObjects.GetLength() )
 	{
 		// If the GC is already processing in another thread, then don't try this again
-		if( TRYENTERCRITICALSECTION(gcCollecting) )
+		if( gcCollecting.try_lock() )
 		{
 			// Skip this if the GC is already running in this thread
 			if( !isProcessing )
@@ -119,7 +119,7 @@ int asCGarbageCollector::AddScriptObjectToGC(void *obj, asCObjectType *objType)
 				isProcessing = false;
 			}
 
-			LEAVECRITICALSECTION(gcCollecting);
+			gcCollecting.unlock();
 		}
 	}
 
@@ -169,12 +169,12 @@ int asCGarbageCollector::GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, a
 int asCGarbageCollector::GarbageCollect(asDWORD flags, asUINT iterations)
 {
 	// If the GC is already processing in another thread, then don't enter here again
-	if( TRYENTERCRITICALSECTION(gcCollecting) )
+	if( gcCollecting.try_lock() )
 	{
 		// If the GC is already processing in this thread, then don't enter here again
 		if( isProcessing ) 
 		{	
-			LEAVECRITICALSECTION(gcCollecting);
+			gcCollecting.unlock();
 			return 1;
 		}
 
@@ -224,7 +224,7 @@ int asCGarbageCollector::GarbageCollect(asDWORD flags, asUINT iterations)
 			}
 
 			isProcessing = false;
-			LEAVECRITICALSECTION(gcCollecting);
+			gcCollecting.unlock();
 			return 0;
 		}
 		else
@@ -245,7 +245,7 @@ int asCGarbageCollector::GarbageCollect(asDWORD flags, asUINT iterations)
 		}
 
 		isProcessing = false;
-		LEAVECRITICALSECTION(gcCollecting);
+		gcCollecting.unlock();
 	}
 	
 	// Return 1 to indicate that the cycle wasn't finished
@@ -397,7 +397,7 @@ int asCGarbageCollector::DestroyNewGarbage()
 			if( ++destroyNewIdx < gcNewObjects.GetLength() )
 			{
 				asSObjTypePair gcObj = GetNewObjectAtIdx(destroyNewIdx);
-				if( engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
+				if( gcObj.type->engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
 				{
 					// Release the object immediately
 
@@ -411,7 +411,7 @@ int asCGarbageCollector::DestroyNewGarbage()
 						if( refCount > 0 ) addRef = true;
 					}
 					else
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
+						gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
 
 					// Was the object really destroyed?
 					if( !addRef )
@@ -425,7 +425,7 @@ int asCGarbageCollector::DestroyNewGarbage()
 					{
 						// Since the object was resurrected in the
 						// destructor, we must add our reference again
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
+						gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
 					}
 
 					destroyNewState = destroyGarbage_haveMore;
@@ -470,23 +470,69 @@ int asCGarbageCollector::DestroyNewGarbage()
 	UNREACHABLE_RETURN;
 }
 
-int asCGarbageCollector::ReportAndReleaseUndestroyedObjects()
+bool asCGarbageCollector::EnterEngineShutdown(asCScriptEngine *closingEngine)
+{
+    // 关闭请求可能来自持有原生对象锁的线程，不能等待正在枚举该对象的 GC。
+    if( !gcCollecting.try_lock() )
+    {
+        ENTERCRITICALSECTION(gcCritical);
+        deferredShutdowns.PushLast(closingEngine);
+        LEAVECRITICALSECTION(gcCritical);
+        return false;
+    }
+    if( isProcessing )
+    {
+        ENTERCRITICALSECTION(gcCritical);
+        deferredShutdowns.PushLast(closingEngine);
+        LEAVECRITICALSECTION(gcCritical);
+        gcCollecting.unlock();
+        return false;
+    }
+    return true;
+}
+
+void asCGarbageCollector::LeaveEngineShutdown()
+{
+    gcCollecting.unlock();
+}
+
+void asCGarbageCollector::DrainDeferredShutdowns()
+{
+    if( !gcCollecting.try_lock() ) return;
+    if( !isProcessing )
+    {
+        for(;;)
+        {
+            ENTERCRITICALSECTION(gcCritical);
+            asCScriptEngine *closingEngine = deferredShutdowns.GetLength() ? deferredShutdowns.PopLast() : 0;
+            LEAVECRITICALSECTION(gcCritical);
+            if( !closingEngine ) break;
+            closingEngine->ShutDownAndRelease();
+        }
+    }
+    gcCollecting.unlock();
+}
+
+int asCGarbageCollector::ReportAndReleaseUndestroyedObjects(asCScriptEngine *closingEngine)
 {
 	// This function will only be called as the engine is shutting down
 
+	// 共享图中仍可有其他引擎的活对象，关闭只移除本引擎节点。
+	MoveAllObjectsToOldList();
 	int items = 0;
 	for( asUINT n = 0; n < gcOldObjects.GetLength(); n++ )
 	{
 		asSObjTypePair gcObj = GetOldObjectAtIdx(n);
+		if( gcObj.type->engine != closingEngine ) continue;
 
 		int refCount = 0;
-		if( gcObj.type->beh.gcGetRefCount && engine->scriptFunctions[gcObj.type->beh.gcGetRefCount] )
-			refCount = engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
+		if( gcObj.type->beh.gcGetRefCount && closingEngine->scriptFunctions[gcObj.type->beh.gcGetRefCount] )
+			refCount = gcObj.type->engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
 
 		// Report the object as not being properly destroyed
 		asCString msg;
 		msg.Format(TXT_d_GC_CANNOT_FREE_OBJ_OF_TYPE_s_REF_COUNT_d, gcObj.seqNbr, gcObj.type->name.AddressOf(), refCount - 1);
-		engine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, msg.AddressOf());
+		closingEngine->WriteMessage("", 0, 0, asMSGTYPE_ERROR, msg.AddressOf());
 
 		// Add additional info for builtin types
 		if( gcObj.type->name == "$func" )
@@ -494,17 +540,19 @@ int asCGarbageCollector::ReportAndReleaseUndestroyedObjects()
 			// Unfortunately we can't show the function declaration here, because the engine may have released the parameter list already so the declaration would only be misleading
 			// We need to show the function type too as for example delegates do not have a name
 			msg.Format(TXT_PREV_FUNC_IS_NAMED_s_TYPE_IS_d, reinterpret_cast<asCScriptFunction*>(gcObj.obj)->GetName(), reinterpret_cast<asCScriptFunction*>(gcObj.obj)->GetFuncType());
-			engine->WriteMessage("", 0, 0, asMSGTYPE_INFORMATION, msg.AddressOf());
+			closingEngine->WriteMessage("", 0, 0, asMSGTYPE_INFORMATION, msg.AddressOf());
 		}
 		else if( gcObj.type->name == "$obj" )
 		{
 			msg.Format(TXT_PREV_TYPE_IS_NAMED_s, reinterpret_cast<asCObjectType*>(gcObj.obj)->GetName());
-			engine->WriteMessage("", 0, 0, asMSGTYPE_INFORMATION, msg.AddressOf());
+			closingEngine->WriteMessage("", 0, 0, asMSGTYPE_INFORMATION, msg.AddressOf());
 		}
 
+		RemoveOldObjectAtIdx(n--);
+
 		// Release the reference that the GC holds if the release functions is still available
-		if( gcObj.type->beh.release && engine->scriptFunctions[gcObj.type->beh.release] )
-			engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
+		if( gcObj.type->beh.release && closingEngine->scriptFunctions[gcObj.type->beh.release] )
+			gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
 
 		items++;
 	}
@@ -561,7 +609,7 @@ int asCGarbageCollector::DestroyOldGarbage()
 					RemoveOldObjectAtIdx(destroyOldIdx);
 					destroyOldIdx--;
 				}
-				else if( engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
+				else if( gcObj.type->engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount) == 1 )
 				{
 					// Release the object immediately
 
@@ -575,7 +623,7 @@ int asCGarbageCollector::DestroyOldGarbage()
 						if( refCount > 0 ) addRef = true;
 					}
 					else
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
+						gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.release);
 
 					// Was the object really destroyed?
 					if( !addRef )
@@ -588,7 +636,7 @@ int asCGarbageCollector::DestroyOldGarbage()
 					{
 						// Since the object was resurrected in the
 						// destructor, we must add our reference again
-						engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
+						gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
 					}
 
 					destroyOldState = destroyGarbage_haveMore;
@@ -646,7 +694,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *obj = gcMap.GetKey(cursor);
 				asSIntTypePair it = gcMap.GetValue(cursor);
 
-				engine->CallObjectMethod(obj, it.type->beh.release);
+				it.type->engine->CallObjectMethod(obj, it.type->beh.release);
 
 				ReturnNode(gcMap.Remove(cursor));
 
@@ -682,7 +730,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 	
 				int refCount = 0;
 				if( gcObj.type->beh.gcGetRefCount )
-					refCount = engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
+					refCount = gcObj.type->engine->CallObjectMethodRetInt(gcObj.obj, gcObj.type->beh.gcGetRefCount);
 
 				if( refCount > 1 )
 				{
@@ -691,11 +739,11 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 					gcMap.Insert(GetNode(gcObj.obj, it));
 
 					// Increment the object's reference counter when putting it in the map
-					engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
+					gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.addref);
 
 					// Mark the object so that we can
 					// see if it has changed since read
-					engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.gcSetFlag);
+					gcObj.type->engine->CallObjectMethod(gcObj.obj, gcObj.type->beh.gcSetFlag);
 				}
 
 				detectIdx++; 
@@ -734,9 +782,9 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				asCObjectType *type = gcMap.GetValue(gcMapCursor).type;
 				gcMap.MoveNext(&gcMapCursor, gcMapCursor);
 
-				if( engine->CallObjectMethodRetBool(obj, type->beh.gcGetFlag) )
+				if( type->engine->CallObjectMethodRetBool(obj, type->beh.gcGetFlag) )
 				{
-					engine->CallObjectMethod(obj, engine, type->beh.gcEnumReferences);
+					type->engine->CallObjectMethod(obj, type->engine, type->beh.gcEnumReferences);
 				}
 
 				// Allow the application to work a little
@@ -773,7 +821,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *obj = gcMap.GetKey(cursor);
 				asSIntTypePair it = gcMap.GetValue(cursor);
 
-				bool gcFlag = engine->CallObjectMethodRetBool(obj, it.type->beh.gcGetFlag);
+				bool gcFlag = it.type->engine->CallObjectMethodRetBool(obj, it.type->beh.gcGetFlag);
 				if( !gcFlag || it.i > 0 )
 				{
 					liveObjects.PushLast(obj);
@@ -806,10 +854,10 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 					ReturnNode(gcMap.Remove(cursor));
 
 					// We need to decrease the reference count again as we remove the object from the map
-					engine->CallObjectMethod(gcObj, type->beh.release);
+					type->engine->CallObjectMethod(gcObj, type->beh.release);
 
 					// Enumerate all the object's references so that they too can be marked as alive
-					engine->CallObjectMethod(gcObj, engine, type->beh.gcEnumReferences);
+					type->engine->CallObjectMethod(gcObj, type->engine, type->beh.gcEnumReferences);
 				}
 
 				// Allow the application to work a little
@@ -835,7 +883,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 				void *gcObj = gcMap.GetKey(gcMapCursor);
 				asCObjectType *type = gcMap.GetValue(gcMapCursor).type;
 
-				bool gcFlag = engine->CallObjectMethodRetBool(gcObj, type->beh.gcGetFlag);
+				bool gcFlag = type->engine->CallObjectMethodRetBool(gcObj, type->beh.gcGetFlag);
 				if( !gcFlag )
 				{
 					// The unmarked object was touched, rerun the detectGarbage loop
@@ -902,7 +950,7 @@ int asCGarbageCollector::IdentifyGarbageWithCyclicRefs()
 					// be null.
 					reinterpret_cast<asCScriptObject*>(gcObj)->CallDestructor();
 				}
-				engine->CallObjectMethod(gcObj, engine, type->beh.gcReleaseAllReferences);
+				type->engine->CallObjectMethod(gcObj, type->engine, type->beh.gcReleaseAllReferences);
 
 				gcMap.MoveNext(&gcMapCursor, gcMapCursor);
 
@@ -994,4 +1042,3 @@ void asCGarbageCollector::GCEnumCallback(void *reference)
 }
 
 END_AS_NAMESPACE
-

@@ -774,6 +774,8 @@ public:
 	virtual void                  *CreateScriptObject(const asITypeInfo *type) = 0;
 	virtual void                  *CreateScriptObjectCopy(void *obj, const asITypeInfo *type) = 0;
 	virtual void                  *CreateUninitializedScriptObject(const asITypeInfo *type) = 0;
+	// 项目定制：Java Object.clone 保留动态类型和字段引用，不调用脚本构造、copy factory 或 opAssign。
+	virtual asIScriptObject       *CreateShallowScriptObjectCopy(asIScriptObject *obj) = 0;
 	virtual asIScriptFunction     *CreateDelegate(asIScriptFunction *func, void *obj) = 0;
 	virtual int                    AssignScriptObject(void *dstObj, void *srcObj, const asITypeInfo *type) = 0;
 	virtual void                   ReleaseScriptObject(void *obj, const asITypeInfo *type) = 0;
@@ -790,6 +792,9 @@ public:
 	virtual asETokenClass ParseToken(const char *string, size_t stringLength = 0, asUINT *tokenLength = 0) const = 0;
 
 	// Garbage collection
+	// 定制：Java 原生对象可被多个脚本引擎引用，类仍归属各引擎，循环引用图共享。
+	// 仅在接收引擎尚未创建 GC 对象时调用。
+	virtual int  ShareGarbageCollector(asIScriptEngine *owner) = 0;
 	virtual int  GarbageCollect(asDWORD flags = asGC_FULL_CYCLE, asUINT numIterations = 1) = 0;
 	virtual void GetGCStatistics(asUINT *currentSize, asUINT *totalDestroyed = 0, asUINT *totalDetected = 0, asUINT *newObjects = 0, asUINT *totalNewDestroyed = 0) const = 0;
 	virtual int  NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type) = 0;
@@ -1225,6 +1230,9 @@ public:
 	// User data
 	virtual void            *SetUserData(void *userData, asPWORD type = 0) = 0;
 	virtual void            *GetUserData(asPWORD type = 0) const = 0;
+	// Java 静态类桥：实参求值完成后、调用宿主函数前执行所属类初始化。
+	// 回调异常沿已有宿主异常边界传播；仅适用于 asFUNC_SYSTEM。
+	virtual int              SetInitializationCallback(void (*callback)(void *), void *parameter = 0) = 0;
 
 protected:
 	virtual ~asIScriptFunction() {};

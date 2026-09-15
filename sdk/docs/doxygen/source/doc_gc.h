@@ -55,5 +55,14 @@ of \ref doc_gc_object "the GC behaviours".
 
 \see \ref doc_reg_gcref_4
 
+\section doc_gc_shared_java 本项目的 Java 对象桥接定制
+
+ShareGarbageCollector(owner) 使接收引擎加入 owner 的引用图，须在接收引擎创建任何 GC 对象前调用。
+对象只登记一次，行为编号和类型编号仍由该对象所属引擎解释；共享图不共享脚本类或模块。
+GetGCStatistics、GetObjectInGC 和循环引用诊断回调的范围随之扩展为整个共享图。
+每个引擎独立同步编译、注册和 GC 的元数据读取；原生 GC 行为仍须自行保证引用枚举与修改的安全。
+关闭引擎只移除该引擎节点；GC 回调中发起的关闭请求在本次遍历完成后执行，调用者交出的引擎引用由队列接管。
+各子引擎保留图所有者，图所有者应在全部子引擎关闭后再关闭。此定制不改变原 GC 的循环检测和引用计数算法。
+
 
 */

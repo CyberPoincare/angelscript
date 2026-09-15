@@ -1319,7 +1319,8 @@ void asCParser::ParseMethodAttributes(asCScriptNode *funcNode)
 			IdentifierIs(t1, OVERRIDE_TOKEN) || 
 			IdentifierIs(t1, EXPLICIT_TOKEN) ||
 			IdentifierIs(t1, PROPERTY_TOKEN) ||
-			IdentifierIs(t1, DELETE_TOKEN) )
+			IdentifierIs(t1, DELETE_TOKEN) ||
+			IdentifierIs(t1, ABSTRACT_TOKEN) )
 			funcNode->AddChildLast(ParseIdentifier());
 		else
 			break;
@@ -3201,7 +3202,8 @@ bool asCParser::IsFuncDecl(bool isMethod)
 					!IdentifierIs(t1, OVERRIDE_TOKEN) &&
 					!IdentifierIs(t1, EXPLICIT_TOKEN) &&
 					!IdentifierIs(t1, PROPERTY_TOKEN) &&
-					!IdentifierIs(t1, DELETE_TOKEN) )
+					!IdentifierIs(t1, DELETE_TOKEN) &&
+					!IdentifierIs(t1, ABSTRACT_TOKEN) )
 				{
 					RewindTo(&t1);
 					break;
@@ -3357,7 +3359,7 @@ asCScriptNode *asCParser::ParseFunction(bool isMethod)
 			node->AddChildLast(ParseToken(ttConst));
 	}
 
-	// TODO: Should support abstract methods, in which case no statement block should be provided
+	// Starsector：无方法体的类成员由 builder 核对抽象类/纯虚方法契约。
 	ParseMethodAttributes(node);
 	if( isSyntaxError ) return node;
 
