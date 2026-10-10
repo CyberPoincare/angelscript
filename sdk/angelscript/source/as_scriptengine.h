@@ -103,6 +103,7 @@ public:
 
 	// Type registration
 	virtual int            RegisterObjectType(const char *obj, int byteSize, asQWORD flags);
+	virtual int            SetObjectReferenceResolver(const char *obj, void *(*resolver)(void *));
 	virtual int            RegisterObjectProperty(const char *obj, const char *declaration, int byteOffset, int compositeOffset = 0, bool isCompositeIndirect = false);
 	virtual int            RegisterObjectMethod(const char *obj, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary = 0, int compositeOffset = 0, bool isCompositeIndirect = false);
 	virtual int            RegisterObjectBehaviour(const char *obj, asEBehaviours behaviour, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary = 0, int compositeOffset = 0, bool isCompositeIndirect = false);
@@ -181,6 +182,7 @@ public:
 	virtual int                    AssignScriptObject(void *dstObj, void *srcObj, const asITypeInfo *type);
 	virtual void                   ReleaseScriptObject(void *obj, const asITypeInfo *type);
 	virtual void                   AddRefScriptObject(void *obj, const asITypeInfo *type);
+	virtual void                  *ResolveObjectReference(void *obj, const asITypeInfo *type) const;
 	virtual int                    RefCastObject(void *obj, asITypeInfo *fromType, asITypeInfo *toType, void **newPtr, bool useOnlyImplicitCast = false);
 	virtual asILockableSharedBool *GetWeakRefFlagOfScriptObject(void *obj, const asITypeInfo *type) const;
 
@@ -198,6 +200,7 @@ public:
 	virtual void GetGCStatistics(asUINT *currentSize, asUINT *totalDestroyed, asUINT *totalDetected, asUINT *newObjects, asUINT *totalNewDestroyed) const;
 	virtual int  NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type);
 	virtual int  GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj = 0, asITypeInfo **type = 0);
+	virtual void SetGCObjectAlias(void *alias, void *object);
 	virtual void GCEnumCallback(void *reference);
 	virtual void ForwardGCEnumReferences(void *ref, asITypeInfo *type);
 	virtual void ForwardGCReleaseReferences(void *ref, asITypeInfo *type);

@@ -153,6 +153,8 @@ public:
 	asCArray<asCFuncdefType*> childFuncDefs;
 
 	asSTypeBehaviour beh;
+	// 原生载体只在宿主交接边界解析；VM 和容器保存实际对象地址。
+	void *(*referenceResolver)(void *) = 0;
 
 	// Used for template types
 	asCArray<asCDataType> templateSubTypes;   // increases refCount for typeinfo held in datatype

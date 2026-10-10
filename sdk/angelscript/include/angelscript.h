@@ -702,6 +702,8 @@ public:
 
 	// Object types
 	virtual int            RegisterObjectType(const char *obj, int byteSize, asQWORD flags) = 0;
+	// 项目定制：原生值载体与 Java 实际对象可有不同地址；只转换引用地址，不创建或持有对象。
+	virtual int            SetObjectReferenceResolver(const char *obj, void *(*resolver)(void *)) = 0;
 	virtual int            RegisterObjectProperty(const char *obj, const char *declaration, int byteOffset, int compositeOffset = 0, bool isCompositeIndirect = false) = 0;
 	virtual int            RegisterObjectMethod(const char *obj, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary = 0, int compositeOffset = 0, bool isCompositeIndirect = false) = 0;
 	virtual int            RegisterObjectBehaviour(const char *obj, asEBehaviours behaviour, const char *declaration, const asSFuncPtr &funcPointer, asDWORD callConv, void *auxiliary = 0, int compositeOffset = 0, bool isCompositeIndirect = false) = 0;
@@ -780,6 +782,7 @@ public:
 	virtual int                    AssignScriptObject(void *dstObj, void *srcObj, const asITypeInfo *type) = 0;
 	virtual void                   ReleaseScriptObject(void *obj, const asITypeInfo *type) = 0;
 	virtual void                   AddRefScriptObject(void *obj, const asITypeInfo *type) = 0;
+	virtual void                  *ResolveObjectReference(void *obj, const asITypeInfo *type) const = 0;
 	virtual int                    RefCastObject(void *obj, asITypeInfo *fromType, asITypeInfo *toType, void **newPtr, bool useOnlyImplicitCast = false) = 0;
 	virtual asILockableSharedBool *GetWeakRefFlagOfScriptObject(void *obj, const asITypeInfo *type) const = 0;
 
@@ -799,6 +802,8 @@ public:
 	virtual void GetGCStatistics(asUINT *currentSize, asUINT *totalDestroyed = 0, asUINT *totalDetected = 0, asUINT *newObjects = 0, asUINT *totalNewDestroyed = 0) const = 0;
 	virtual int  NotifyGarbageCollectorOfNewObject(void *obj, asITypeInfo *type) = 0;
 	virtual int  GetObjectInGC(asUINT idx, asUINT *seqNbr = 0, void **obj = 0, asITypeInfo **type = 0) = 0;
+	// 定制：C++ 接口子对象与 Java 实际对象可有不同地址；弱别名不新增对象或持有根。
+	virtual void SetGCObjectAlias(void *alias, void *object) = 0;
 	virtual void GCEnumCallback(void *reference) = 0;
 	virtual void ForwardGCEnumReferences(void *ref, asITypeInfo *type) = 0;
 	virtual void ForwardGCReleaseReferences(void *ref, asITypeInfo *type) = 0;

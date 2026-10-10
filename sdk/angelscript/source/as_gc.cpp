@@ -316,6 +316,7 @@ void asCGarbageCollector::RemoveNewObjectAtIdx(int idx)
 	// We need to protect this update with a critical section as
 	// another thread might be appending an object at the same time
 	ENTERCRITICALSECTION(gcCritical);
+	RemoveObjectAliases(gcNewObjects[idx].obj);
 	if( idx == (int)gcNewObjects.GetLength() - 1)
 		gcNewObjects.PopLast();
 	else
@@ -328,6 +329,7 @@ void asCGarbageCollector::RemoveOldObjectAtIdx(int idx)
 	// We need to protect this update with a critical section as
 	// another thread might be appending an object at the same time
 	ENTERCRITICALSECTION(gcCritical);
+	RemoveObjectAliases(gcOldObjects[idx].obj);
 	if( idx == (int)gcOldObjects.GetLength() - 1)
 		gcOldObjects.PopLast();
 	else
@@ -1014,10 +1016,34 @@ void asCGarbageCollector::ReturnNode(asSMapNode_t *node)
 		freeNodes.PushLast(node);
 }
 
+void asCGarbageCollector::SetObjectAlias(void *alias, void *object)
+{
+	// 与对象列表共用短临界区，不等待 gcCollecting，避免宿主字段锁与收集锁倒序。
+	ENTERCRITICALSECTION(gcCritical);
+	if( object && alias != object ) objectAliases[alias] = object;
+	else objectAliases.erase(alias);
+	LEAVECRITICALSECTION(gcCritical);
+}
+
+void asCGarbageCollector::RemoveObjectAliases(void *object)
+{
+	// 调用方已持有 gcCritical；节点已释放后这里只比较地址，不访问对象。
+	for( auto it = objectAliases.begin(); it != objectAliases.end(); )
+	{
+		if( it->first == object || it->second == object ) it = objectAliases.erase(it);
+		else ++it;
+	}
+}
+
 void asCGarbageCollector::GCEnumCallback(void *reference)
 {
 	// This function will only be called within the critical section gcCollecting
 	asASSERT(isProcessing);
+	// AS 字段、dictionaryValue、ref 和数组均可保存接口地址；计数与标记统一归实际节点。
+	ENTERCRITICALSECTION(gcCritical);
+	auto alias = objectAliases.find(reference);
+	if( alias != objectAliases.end() ) reference = alias->second;
+	LEAVECRITICALSECTION(gcCritical);
 
 	if( detectState == countReferences_loop )
 	{

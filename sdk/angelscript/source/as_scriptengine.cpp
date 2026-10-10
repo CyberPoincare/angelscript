@@ -1913,6 +1913,23 @@ asCTypeInfo* asCScriptEngine::GetTemplateSubTypeByName(const asCString &name)
 	return subtype;
 }
 
+int asCScriptEngine::SetObjectReferenceResolver(const char *name, void *(*resolver)(void *))
+{
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
+	asCObjectType *type = CastToObjectType(reinterpret_cast<asCTypeInfo *>(GetTypeInfoByDecl(name)));
+	if( type == 0 || !(type->flags & asOBJ_REF) || (type->flags & asOBJ_SCRIPT_OBJECT) )
+		return asINVALID_TYPE;
+	type->referenceResolver = resolver;
+	return asSUCCESS;
+}
+
+void *asCScriptEngine::ResolveObjectReference(void *obj, const asITypeInfo *type) const
+{
+	if( obj == 0 || type == 0 ) return obj;
+	const asCObjectType *objectType = CastToObjectType(reinterpret_cast<asCTypeInfo *>(const_cast<asITypeInfo *>(type)));
+	return objectType && objectType->referenceResolver ? objectType->referenceResolver(obj) : obj;
+}
+
 int asCScriptEngine::RegisterObjectType(const char *name, int byteSize, asQWORD flags)
 {
 	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
@@ -5250,6 +5267,12 @@ void asCScriptEngine::GetGCStatistics(asUINT *currentSize, asUINT *totalDestroye
 }
 
 // interface
+void asCScriptEngine::SetGCObjectAlias(void *alias, void *object)
+{
+	gc->SetObjectAlias(alias, object);
+}
+
+// interface
 void asCScriptEngine::GCEnumCallback(void *reference)
 {
 	gc->GCEnumCallback(reference);
@@ -5960,6 +5983,7 @@ void asCScriptEngine::AddRefScriptObject(void *obj, const asITypeInfo *type)
 {
 	// Make sure it is not a null pointer
 	if( obj == 0 || type == 0 ) return;
+	obj = ResolveObjectReference(obj, type);
 
 	const asCTypeInfo *ti = reinterpret_cast<const asCTypeInfo*>(type);
 	if (ti->flags & asOBJ_FUNCDEF)
@@ -5982,6 +6006,7 @@ void asCScriptEngine::ReleaseScriptObject(void *obj, const asITypeInfo *type)
 {
 	// Make sure it is not a null pointer
 	if( obj == 0 || type == 0 ) return;
+	obj = ResolveObjectReference(obj, type);
 
 	const asCTypeInfo *ti = reinterpret_cast<const asCTypeInfo*>(type);
 	if (ti->flags & asOBJ_FUNCDEF)

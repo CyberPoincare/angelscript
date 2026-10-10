@@ -2,6 +2,7 @@
 #include <new>
 #include <assert.h>
 #include <string.h>
+#include <utility>
 
 BEGIN_AS_NAMESPACE
 
@@ -27,7 +28,7 @@ CScriptHandle::CScriptHandle(const CScriptHandle &other)
 
 CScriptHandle::CScriptHandle(void *ref, asITypeInfo *type)
 {
-	m_ref  = ref;
+	m_ref  = type ? type->GetEngine()->ResolveObjectReference(ref, type) : ref;
 	m_type = type;
 
 	AddRefHandle();
@@ -84,14 +85,12 @@ CScriptHandle &CScriptHandle::operator =(const CScriptHandle &other)
 
 void CScriptHandle::Set(void *ref, asITypeInfo *type)
 {
-	if( m_ref == ref ) return;
-
-	ReleaseHandle();
-
-	m_ref  = ref;
-	m_type = type;
-
-	AddRefHandle();
+	if( type ) ref = type->GetEngine()->ResolveObjectReference(ref, type);
+	if( m_ref == ref && m_type == type ) return;
+	// 同一实际向量可经不同类型别名交接；先持有新根，再释放旧槽。
+	CScriptHandle next(ref, type);
+	std::swap(m_ref, next.m_ref);
+	std::swap(m_type, next.m_type);
 }
 
 void *CScriptHandle::GetRef()

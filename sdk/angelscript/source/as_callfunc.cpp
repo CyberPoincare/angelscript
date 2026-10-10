@@ -822,9 +822,12 @@ int CallSystemFunction(int id, asCContext *context)
 			retQW[0] >>= 32;
 #endif
 
-			context->m_regs.objectRegister = (void*)(asPWORD)retQW[0];
+			void *returned = (void*)(asPWORD)retQW[0];
+			context->m_regs.objectRegister = engine->ResolveObjectReference(returned, descr->returnType.GetTypeInfo());
 
-			if (sysFunc->returnAutoHandle && context->m_regs.objectRegister)
+			// C++ 载体拥有实际对象；借出载体时把返回根转交给 VM。
+			// 实际对象地址的返回仍遵守普通 @/@+ 所有权规则。
+			if ((sysFunc->returnAutoHandle || context->m_regs.objectRegister != returned) && context->m_regs.objectRegister)
 			{
 				asASSERT(!(descr->returnType.GetTypeInfo()->flags & asOBJ_NOCOUNT));
 				engine->CallObjectMethod(context->m_regs.objectRegister, CastToObjectType(descr->returnType.GetTypeInfo())->beh.addref);

@@ -1053,6 +1053,7 @@ int asCContext::SetObject(void *obj)
 
 	asASSERT( *(asPWORD*)&m_regs.stackFramePointer[0] == 0 );
 
+	obj = m_engine->ResolveObjectReference(obj, m_initialFunction->objectType);
 	*(asPWORD*)&m_regs.stackFramePointer[0] = (asPWORD)obj;
 
 	// TODO: This should be optional by having a flag where the application can chose whether it should be done or not
@@ -1376,6 +1377,10 @@ int asCContext::SetArgObject(asUINT arg, void *obj)
 		m_status = asEXECUTION_ERROR;
 		return asINVALID_TYPE;
 	}
+
+	// 句柄引用参数指向句柄槽；只有对象地址自身可在此解析。
+	if( !dt->IsObjectHandle() || !dt->IsReference() )
+		obj = m_engine->ResolveObjectReference(obj, dt->GetTypeInfo());
 
 	// If the object should be sent by value we must make a copy of it
 	if( !dt->IsReference() )
@@ -5885,6 +5890,13 @@ int asCContext::CallGeneric(asCScriptFunction *descr)
 	m_regs.valueRegister = gen.returnVal;
 	m_regs.objectRegister = gen.objectRegister;
 	m_regs.objectType = descr->returnType.GetTypeInfo();
+	if( descr->returnType.IsObjectHandle() && !descr->returnType.IsReference() )
+	{
+		m_regs.objectRegister = m_engine->ResolveObjectReference(m_regs.objectRegister, m_regs.objectType);
+		// 直接写入返回槽的原生载体也须转交一个返回根。
+		if( m_regs.objectRegister != gen.objectRegister && !sysFunc->returnAutoHandle )
+			m_engine->AddRefScriptObject(m_regs.objectRegister, m_regs.objectType);
+	}
 
 	// Increase the returned handle if the function has been declared with autohandles
 	// and the engine is not set to use the old mode for the generic calling convention

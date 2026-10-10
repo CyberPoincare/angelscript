@@ -627,8 +627,8 @@ void CScriptArray::SetValue(asUINT index, void *value)
 	else if( subTypeId & asTYPEID_OBJHANDLE )
 	{
 		void *tmp = *(void**)ptr;
-		*(void**)ptr = *(void**)value;
-		objType->GetEngine()->AddRefScriptObject(*(void**)value, objType->GetSubType());
+		*(void**)ptr = objType->GetEngine()->ResolveObjectReference(*(void**)value, objType->GetSubType());
+		objType->GetEngine()->AddRefScriptObject(*(void**)ptr, objType->GetSubType());
 		if( tmp )
 			objType->GetEngine()->ReleaseScriptObject(tmp, objType->GetSubType());
 	}

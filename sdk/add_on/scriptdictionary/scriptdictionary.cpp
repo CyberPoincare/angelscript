@@ -749,7 +749,7 @@ void CScriptDictValue::Set(void *value, int typeId)
 	if( typeId & asTYPEID_OBJHANDLE )
 	{
 		// We're receiving a reference to the handle, so we need to dereference it
-		m_valueObj = *(void**)value;
+		m_valueObj = m_engine->ResolveObjectReference(*(void**)value, m_engine->GetTypeInfoById(typeId));
 		m_engine->AddRefScriptObject(m_valueObj, m_engine->GetTypeInfoById(typeId));
 	}
 	else if( typeId & asTYPEID_MASK_OBJECT )

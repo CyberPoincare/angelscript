@@ -292,7 +292,7 @@ void CScriptAny::Store(void *ref, int refTypeId)
 	if( value.typeId & asTYPEID_OBJHANDLE )
 	{
 		// We're receiving a reference to the handle, so we need to dereference it
-		value.valueObj = *(void**)ref;
+		value.valueObj = engine->ResolveObjectReference(*(void**)ref, engine->GetTypeInfoById(value.typeId));
 		engine->AddRefScriptObject(value.valueObj, engine->GetTypeInfoById(value.typeId));
 	}
 	else if( value.typeId & asTYPEID_MASK_OBJECT )

@@ -437,7 +437,10 @@ int asCGeneric::SetReturnAddress(void *val)
 	else if( sysFunction->returnType.IsObjectHandle() )
 	{
 		// Store the handle without increasing reference
-		objectRegister = val;
+		objectRegister = engine->ResolveObjectReference(val, sysFunction->returnType.GetTypeInfo());
+		// 载体返回是原生拥有者的借出；@+ 的增持留给调用方统一执行。
+		if( objectRegister != val && !sysFunction->sysFuncIntf->returnAutoHandle )
+			engine->AddRefScriptObject(objectRegister, sysFunction->returnType.GetTypeInfo());
 		return 0;
 	}
 
@@ -459,6 +462,7 @@ int asCGeneric::SetReturnObject(void *obj)
 
 	if( dt->IsObjectHandle() )
 	{
+		obj = engine->ResolveObjectReference(obj, dt->GetTypeInfo());
 		// Increase the reference counter
 		if (dt->IsFuncdef())
 		{
@@ -733,6 +737,7 @@ int asCGenericVariadic::SetReturnObject(void* obj)
 
 	if (dt->IsObjectHandle())
 	{
+		obj = engine->ResolveObjectReference(obj, dt->GetTypeInfo());
 		// Increase the reference counter
 		if (dt->IsFuncdef())
 		{

@@ -45,6 +45,7 @@
 #include "as_map.h"
 #include "as_thread.h"
 #include <mutex>
+#include <unordered_map>
 
 BEGIN_AS_NAMESPACE
 
@@ -60,6 +61,7 @@ public:
 	int    GarbageCollect(asDWORD flags, asUINT iterations);
 	void   GetStatistics(asUINT *currentSize, asUINT *totalDestroyed, asUINT *totalDetected, asUINT *newObjects, asUINT *totalNewDestroyed) const;
 	void   GCEnumCallback(void *reference);
+	void   SetObjectAlias(void *alias, void *object);
 	int    AddScriptObjectToGC(void *obj, asCObjectType *objType);
 	int    GetObjectInGC(asUINT idx, asUINT *seqNbr, void **obj, asITypeInfo **type);
 
@@ -111,6 +113,7 @@ protected:
 	asSObjTypePair GetOldObjectAtIdx(int idx);
 	void           RemoveNewObjectAtIdx(int idx);
 	void           RemoveOldObjectAtIdx(int idx);
+	void           RemoveObjectAliases(void *object);
 	void           MoveObjectToOldList(int idx);
 	void           MoveAllObjectsToOldList();
 
@@ -124,6 +127,8 @@ protected:
 	// This map holds objects currently being searched for cyclic references, it also holds a 
 	// counter that gives the number of references to the object that the GC can't reach
 	asCMap<void*, asSIntTypePair>      gcMap;
+	// 仅转换接口地址，不持有对象；实际节点退出共享 GC 图时删除所有对应别名。
+	std::unordered_map<void*, void*>   objectAliases;
 
 	// State variables
 	egcDestroyState                    destroyNewState;
