@@ -110,6 +110,13 @@ struct asSSystemFunctionInterface
 	int                  compositeOffset;
 	bool                 isCompositeIndirect;
 	void                *auxiliary; // can be used for functors, e.g. by asCALL_THISCALL_ASGLOBAL or asCALL_THISCALL_OBJFIRST
+	// Starsector：只缓存原生 ABI 签名分类，不进入字节码或改变函数身份。
+	enum EScalarCall { SC_NONE, SC_UINT_METHOD, SC_UINT_METHOD_DIRECT, SC_INT_FUNCTION_TWO, SC_FLOAT_FUNCTION_ONE };
+	EScalarCall          scalarCall;
+	bool                 directPointerMethod;
+	// Starsector：仅用于 ARM64 原生调用内部的寄存器签名分类；公共调用/所有权流程不变。
+	enum ENativeSimpleCall { NSC_NONE, NSC_UINT, NSC_BOOL, NSC_FLOAT, NSC_DOUBLE, NSC_POINTER, NSC_VOID_FLOAT, NSC_FLOAT_FUNCTION_FIVE };
+	ENativeSimpleCall    nativeSimpleCall;
 
 	struct SClean
 	{
@@ -143,6 +150,9 @@ struct asSSystemFunctionInterface
 		compositeOffset     = 0;
 		isCompositeIndirect = false;
 		auxiliary           = 0;
+		scalarCall          = SC_NONE;
+		directPointerMethod = false;
+		nativeSimpleCall    = NSC_NONE;
 
 		paramAutoHandles.SetLength(0);
 		cleanArgs.SetLength(0);
@@ -162,6 +172,9 @@ struct asSSystemFunctionInterface
 		compositeOffset     = in.compositeOffset;
 		isCompositeIndirect = in.isCompositeIndirect;
 		auxiliary           = in.auxiliary;
+		scalarCall          = in.scalarCall;
+		directPointerMethod = in.directPointerMethod;
+		nativeSimpleCall    = in.nativeSimpleCall;
 
 		cleanArgs           = in.cleanArgs;
 		paramAutoHandles    = in.paramAutoHandles;

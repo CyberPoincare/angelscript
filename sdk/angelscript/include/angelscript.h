@@ -569,8 +569,16 @@ extern "C"
 	AS_API const char      *asGetLibraryVersion();
 	AS_API const char      *asGetLibraryOptions();
 
+	// Starsector 定制：预构建指令缓存只读取正文；公开可写 GetByteCode 会永久撤销缓存。
+	// 绑定必须在模块发布前完成，机器码及入口位图对应同一 SDK/宿主 ABI。
+	AS_API const asDWORD *asGetReadOnlyByteCode(const asIScriptFunction *function, asUINT *length);
+	AS_API int asBindNativeByteCode(asIScriptFunction *function, asJITFunction body,
+	                               const asBYTE *entries, asUINT length);
+
 	// Context
 	AS_API asIScriptContext *asGetActiveContext();
+	// Starsector：仅查询无定制状态、无外部持有者的已完成帧；不改变既有接口布局。
+	AS_API bool             asCanReuseContext(asIScriptContext *context);
 
 	// Thread support
 	AS_API int               asPrepareMultithread(asIThreadManager *externalMgr = 0);

@@ -12,6 +12,8 @@ using namespace std;
 
 BEGIN_AS_NAMESPACE
 
+
+
 // This macro is used to avoid warnings about unused variables.
 // Usually where the variables are only used in debug mode.
 #define UNUSED_VAR(x) (void)(x)
@@ -20,6 +22,9 @@ BEGIN_AS_NAMESPACE
 // Use the angelscript engine's memory routines by default
 static asALLOCFUNC_t userAlloc = asAllocMem;
 static asFREEFUNC_t  userFree  = asFreeMem;
+
+// 最后一次释放继续使用实际数组析构与当前内存回调。
+void CScriptArray::DestroyOnLastRelease() const { this->~CScriptArray(); userFree(const_cast<CScriptArray*>(this)); }
 
 // Allows the application to set which memory routines should be used by the array object
 void CScriptArray::SetMemoryFunctions(asALLOCFUNC_t allocFunc, asFREEFUNC_t freeFunc)
@@ -31,12 +36,7 @@ void CScriptArray::SetMemoryFunctions(asALLOCFUNC_t allocFunc, asFREEFUNC_t free
 static void RegisterScriptArray_Native(asIScriptEngine *engine);
 static void RegisterScriptArray_Generic(asIScriptEngine *engine);
 
-struct SArrayBuffer
-{
-	asDWORD maxElements;
-	asDWORD numElements;
-	asBYTE  data[1];
-};
+
 
 struct SArrayCache
 {
@@ -660,10 +660,7 @@ CScriptArray::~CScriptArray()
 	if( objType ) objType->Release();
 }
 
-asUINT CScriptArray::GetSize() const
-{
-	return buffer->numElements;
-}
+
 
 bool CScriptArray::IsEmpty() const
 {
@@ -959,26 +956,8 @@ void CScriptArray::RemoveLast()
 }
 
 // Return a pointer to the array element. Returns 0 if the index is out of bounds
-const void *CScriptArray::At(asUINT index) const
-{
-	if( buffer == 0 || index >= buffer->numElements )
-	{
-		// If this is called from a script we raise a script exception
-		asIScriptContext *ctx = asGetActiveContext();
-		if( ctx )
-			ctx->SetException("Index out of bounds");
-		return 0;
-	}
 
-	if( (subTypeId & asTYPEID_MASK_OBJECT) && !(subTypeId & asTYPEID_OBJHANDLE) )
-		return *(void**)(buffer->data + elementSize*index);
-	else
-		return buffer->data + elementSize*index;
-}
-void *CScriptArray::At(asUINT index)
-{
-	return const_cast<void*>(const_cast<const CScriptArray *>(this)->At(index));
-}
+
 
 void *CScriptArray::GetBuffer()
 {
@@ -1954,25 +1933,9 @@ void CScriptArray::ReleaseAllHandles(asIScriptEngine *)
 	Resize(0);
 }
 
-void CScriptArray::AddRef() const
-{
-	// Clear the GC flag then increase the counter
-	gcFlag = false;
-	asAtomicInc(refCount);
-}
 
-void CScriptArray::Release() const
-{
-	// Clearing the GC flag then descrease the counter
-	gcFlag = false;
-	if( asAtomicDec(refCount) == 0 )
-	{
-		// When reaching 0 no more references to this instance
-		// exists and the object should be destroyed
-		this->~CScriptArray();
-		userFree(const_cast<CScriptArray*>(this));
-	}
-}
+
+
 
 // GC behaviour
 int CScriptArray::GetRefCount()

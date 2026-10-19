@@ -1018,20 +1018,74 @@ void asCGarbageCollector::ReturnNode(asSMapNode_t *node)
 
 void asCGarbageCollector::SetObjectAlias(void *alias, void *object)
 {
-	// 与对象列表共用短临界区，不等待 gcCollecting，避免宿主字段锁与收集锁倒序。
+	// 与对象列表共用原短临界区；两张表都不持有对象或类型。
 	ENTERCRITICALSECTION(gcCritical);
-	if( object && alias != object ) objectAliases[alias] = object;
-	else objectAliases.erase(alias);
+#ifndef AS_NO_EXCEPTIONS
+	try
+#endif
+	{
+		if( object && alias != object )
+		{
+			auto previous = objectAliases.find(alias);
+			void *oldObject = previous == objectAliases.end() ? 0 : previous->second;
+			if( oldObject != object )
+			{
+				// 先准备反向项；正向登记分配失败时撤掉它，保持原有映射不变。
+				auto reverse = aliasesByObject.emplace(object, alias);
+#ifndef AS_NO_EXCEPTIONS
+				try
+#endif
+				{
+					objectAliases[alias] = object;
+				}
+#ifndef AS_NO_EXCEPTIONS
+				catch(...)
+				{
+					aliasesByObject.erase(reverse);
+					throw;
+				}
+#endif
+				if( oldObject )
+				{
+					auto range = aliasesByObject.equal_range(oldObject);
+					for( auto it = range.first; it != range.second; ++it )
+						if( it->second == alias ) { aliasesByObject.erase(it); break; }
+				}
+			}
+		}
+		else RemoveObjectAlias(alias);
+	}
+#ifndef AS_NO_EXCEPTIONS
+	catch(...)
+	{
+		LEAVECRITICALSECTION(gcCritical);
+		throw;
+	}
+#endif
 	LEAVECRITICALSECTION(gcCritical);
+}
+
+void asCGarbageCollector::RemoveObjectAlias(void *alias)
+{
+	// 调用方已持 gcCritical；别名改指/清除同时维护两张借用地址表。
+	auto found = objectAliases.find(alias);
+	if( found == objectAliases.end() ) return;
+	auto range = aliasesByObject.equal_range(found->second);
+	for( auto it = range.first; it != range.second; ++it )
+		if( it->second == alias ) { aliasesByObject.erase(it); break; }
+	objectAliases.erase(found);
 }
 
 void asCGarbageCollector::RemoveObjectAliases(void *object)
 {
-	// 调用方已持有 gcCritical；节点已释放后这里只比较地址，不访问对象。
-	for( auto it = objectAliases.begin(); it != objectAliases.end(); )
+	// 与原扫描同时覆盖“别名地址就是该对象”及“目标是该对象”两种情况。
+	// 节点已释放，只比较地址；不改变实际节点释放与 GC 游标的推进顺序。
+	RemoveObjectAlias(object);
+	auto range = aliasesByObject.equal_range(object);
+	for( auto it = range.first; it != range.second; )
 	{
-		if( it->first == object || it->second == object ) it = objectAliases.erase(it);
-		else ++it;
+		objectAliases.erase(it->second);
+		it = aliasesByObject.erase(it);
 	}
 }
 

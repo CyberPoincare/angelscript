@@ -55,6 +55,23 @@
 
 BEGIN_AS_NAMESPACE
 
+namespace {
+// 同一线程可复用已解析的函数槽位，不必为每次 FREE/REFCPY 重入元数据锁。
+// 全局唯一代号同时区分引擎地址复用；缓存只有裸借用指针，不增加生命周期根。
+std::atomic<asQWORD> scriptFunctionLookupEpochs(0);
+asQWORD nextScriptFunctionLookupEpoch()
+{
+	return scriptFunctionLookupEpochs.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+struct ScriptFunctionLookup
+{
+	const asCScriptEngine *engine = 0;
+	asQWORD epoch = 0;
+	int id = 0;
+	asCScriptFunction *function = 0;
+};
+thread_local ScriptFunctionLookup scriptFunctionLookups[128];
+}
 
 
 #ifdef AS_PROFILE
@@ -658,6 +675,7 @@ asIScriptFunction *asCScriptEngine::CreateDelegate(asIScriptFunction *func, void
 
 asCScriptEngine::asCScriptEngine()
 {
+	scriptFunctionLookupEpoch.store(nextScriptFunctionLookupEpoch(), std::memory_order_relaxed);
 	asCThreadManager::Prepare(0);
 
 	shuttingDown = false;
@@ -857,7 +875,7 @@ asCScriptEngine::~asCScriptEngine()
 	if( refCount.get() > 0 )
 		WriteMessage("", 0, 0, asMSGTYPE_ERROR, TXT_ENGINE_REF_COUNT_ERROR_DURING_SHUTDOWN);
 
-	mapTypeIdToTypeInfo.EraseAll();
+	typeInfoBySequence.Allocate(0, false);
 
 	// First remove what is not used, so that other groups can be deleted safely
 	defaultGroup.RemoveConfiguration(this, true);
@@ -926,6 +944,7 @@ asCScriptEngine::~asCScriptEngine()
 			// Set the engine pointer to null to signal that the function is no longer part of the engine
 			scriptFunctions[n]->engine = 0;
 		}
+	scriptFunctionLookupEpoch.store(nextScriptFunctionLookupEpoch(), std::memory_order_release);
 	scriptFunctions.SetLength(0);
 
 	// Increase the internal ref count for these builtin object types, so the destructor is not called incorrectly
@@ -1667,11 +1686,25 @@ asCString asCScriptEngine::GetFunctionDeclaration(int funcId)
 // internal
 asCScriptFunction *asCScriptEngine::GetScriptFunction(int funcId) const
 {
+	ScriptFunctionLookup &cached = scriptFunctionLookups[asUINT(funcId) % 128];
+	const asQWORD epoch = scriptFunctionLookupEpoch.load(std::memory_order_acquire);
+	if( cached.engine == this && cached.epoch == epoch && cached.id == funcId )
+		return cached.function;
+
 	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( funcId < 0 || funcId >= (int)scriptFunctions.GetLength() )
 		return 0;
 
-	return scriptFunctions[funcId];
+	asCScriptFunction *function = scriptFunctions[funcId];
+	if( function )
+	{
+		// 只缓存成功；持锁重新读代号，不能把等待注册/卸载前的代号发布给新槽位。
+		cached.engine = this;
+		cached.epoch = scriptFunctionLookupEpoch.load(std::memory_order_relaxed);
+		cached.id = funcId;
+		cached.function = function;
+	}
+	return function;
 }
 
 
@@ -4539,6 +4572,7 @@ void asCScriptEngine::CallObjectMethod(void *obj, int func) const
 
 void asCScriptEngine::CallObjectMethod(void *obj, asSSystemFunctionInterface *i, asCScriptFunction *s) const
 {
+
 #if defined(__GNUC__) || defined(AS_PSVITA)
 	if( i->callConv == ICC_GENERIC_METHOD )
 	{
@@ -5353,7 +5387,15 @@ int asCScriptEngine::GetTypeIdFromDataType(const asCDataType &dtIn) const
 
 			ot->typeId = typeId;
 
-			mapTypeIdToTypeInfo.Insert(typeId, ot);
+			// 序号单调分配且不复用，沿原写锁登记同一类型；空洞保留 nullptr。
+			const asUINT sequence = asUINT(typeId & asTYPEID_MASK_SEQNBR);
+			while( typeInfoBySequence.GetLength() <= sequence )
+			{
+				const asUINT previous = typeInfoBySequence.GetLength();
+				typeInfoBySequence.PushLast(0);
+				if( typeInfoBySequence.GetLength() == previous ) break; // 与原表一样，不在分配失败后越界访问
+			}
+			if( sequence < typeInfoBySequence.GetLength() ) typeInfoBySequence[sequence] = ot;
 		}
 		RELEASEEXCLUSIVE(engineRWLock);
 	}
@@ -5388,9 +5430,13 @@ asCDataType asCScriptEngine::GetDataTypeFromTypeId(int typeId) const
 	// First check if the typeId is an object type
 	asCTypeInfo *ot = 0;
 	ACQUIRESHARED(engineRWLock);
-	asSMapNode<int,asCTypeInfo*> *cursor = 0;
-	if( mapTypeIdToTypeInfo.MoveTo(&cursor, baseId) )
-		ot = mapTypeIdToTypeInfo.GetValue(cursor);
+	const asUINT sequence = asUINT(baseId & asTYPEID_MASK_SEQNBR);
+	if( sequence < typeInfoBySequence.GetLength() )
+	{
+		ot = typeInfoBySequence[sequence];
+		// 序号相同而对象种类位不同仍须失败，不能把伪造的类型编号当作有效类型。
+		if( ot && ot->typeId != baseId ) ot = 0;
+	}
 	RELEASESHARED(engineRWLock);
 
 	if( ot )
@@ -5416,17 +5462,9 @@ asCObjectType *asCScriptEngine::GetObjectTypeFromTypeId(int typeId) const
 void asCScriptEngine::RemoveFromTypeIdMap(asCTypeInfo *type)
 {
 	ACQUIREEXCLUSIVE(engineRWLock);
-	asSMapNode<int,asCTypeInfo*> *cursor = 0;
-	mapTypeIdToTypeInfo.MoveFirst(&cursor);
-	while( cursor )
-	{
-		if(mapTypeIdToTypeInfo.GetValue(cursor) == type )
-		{
-			mapTypeIdToTypeInfo.Erase(cursor);
-			break;
-		}
-		mapTypeIdToTypeInfo.MoveNext(&cursor, cursor);
-	}
+	const asUINT sequence = asUINT(type->typeId & asTYPEID_MASK_SEQNBR);
+	if( sequence < typeInfoBySequence.GetLength() && typeInfoBySequence[sequence] == type )
+		typeInfoBySequence[sequence] = 0;
 	RELEASEEXCLUSIVE(engineRWLock);
 }
 
@@ -6218,12 +6256,15 @@ void asCScriptEngine::AddScriptFunction(asCScriptFunction *func)
 		asASSERT( scriptFunctions[func->id] == 0 || scriptFunctions[func->id] == func );
 		scriptFunctions[func->id] = func;
 	}
+	scriptFunctionLookupEpoch.store(nextScriptFunctionLookupEpoch(), std::memory_order_release);
 }
 
 void asCScriptEngine::RemoveScriptFunction(asCScriptFunction *func)
 {
 	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
 	if( func == 0 || func->id < 0 ) return;
+	// 先使借用缓存失效，再清空槽位或回收 ID；查询缺失仍由原表和原锁判定。
+	scriptFunctionLookupEpoch.store(nextScriptFunctionLookupEpoch(), std::memory_order_release);
 	int id = func->id & ~FUNC_IMPORTED;
 	if( func->funcType == asFUNC_IMPORTED )
 	{
@@ -6786,7 +6827,7 @@ int asCScriptEngine::GetLastFunctionId() const
 // interface
 asIScriptFunction *asCScriptEngine::GetFunctionById(int funcId) const
 {
-	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
+	// GetScriptFunction 的未命中路径已持有同一锁，无需在此重复进入。
 	return GetScriptFunction(funcId);
 }
 

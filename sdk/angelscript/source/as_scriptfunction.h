@@ -41,6 +41,7 @@
 #define AS_SCRIPTFUNCTION_H
 
 #include "as_config.h"
+#include <atomic>
 #include "as_string.h"
 #include "as_array.h"
 #include "as_datatype.h"
@@ -359,6 +360,10 @@ public:
 	{
 		// Bytecode for the script function
 		asCArray<asDWORD>               byteCode;
+		// Starsector 定制：可写字节码暴露后，已编译执行必须回到实际字节码。
+		std::atomic<bool> nativeByteCodeExposed{false};
+		asCArray<asBYTE> nativeEntries;
+		asJITFunction nativeMachineFunction = 0;
 
 		// The stack space needed for the local variables
 		asDWORD                         variableSpace;

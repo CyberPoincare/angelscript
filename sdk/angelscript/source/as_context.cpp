@@ -267,6 +267,23 @@ int asCContext::AddRef() const
 	return m_refCount.atomicInc();
 }
 
+// Starsector：上下文只缓存普通成功帧，所有定制状态仍按原析构路径清理。
+bool asCContext::CanReuseForPool() const
+{
+	if( m_engine == 0 || !m_holdEngineRef || m_refCount.get() != 1 ||
+		(m_status != asEXECUTION_FINISHED && m_status != asEXECUTION_UNINITIALIZED) || m_lineCallback || m_exceptionCallback || IsNested() )
+		return false;
+	ACQUIRESHARED(m_engine->engineRWLock);
+	const bool empty = m_userData.GetLength() == 0;
+	RELEASESHARED(m_engine->engineRWLock);
+	return empty;
+}
+
+bool asCanReuseContext(asIScriptContext *context)
+{
+	return context != 0 && static_cast<asCContext*>(context)->CanReuseForPool();
+}
+
 // interface
 int asCContext::Release() const
 {
@@ -2245,8 +2262,27 @@ void asCContext::CallInterfaceMethod(asCScriptFunction *func)
 #define BEGIN() switch( *(const asBYTE*)l_bc )
 #endif
 
+// Starsector 定制：在既有帧交接边界执行预构建的同一 SDK 指令正文，不插入 JIT/行提示。
+static bool TryNativeInstructionBody(asCContext* context, asDWORD* pc, asDWORD* sp, asDWORD* fp)
+{
+    auto* function = context->m_currentFunction;
+    auto* data = function ? function->scriptData : 0;
+    if( !data || data->nativeEntries.GetLength() == 0 || !data->nativeMachineFunction ||
+        data->nativeByteCodeExposed.load(std::memory_order_acquire) )
+        return false;
+    const auto offset = pc - data->byteCode.AddressOf();
+    if( offset < 0 || asUINT(offset) >= data->nativeEntries.GetLength() || !data->nativeEntries[asUINT(offset)] )
+        return false;
+    context->m_regs.programPointer = pc;
+    context->m_regs.stackPointer = sp;
+    context->m_regs.stackFramePointer = fp;
+    data->nativeMachineFunction(&context->m_regs, asPWORD(offset));
+    return true;
+}
+
 void asCContext::ExecuteNext()
 {
+    if(m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,m_regs.programPointer,m_regs.stackPointer,m_regs.stackFramePointer))return;
 #if defined(_MSC_VER) && defined(__clang__)
 // Disable the warning about use of HUGE_VAL
 #pragma GCC diagnostic ignored "-Wnan-infinity-disabled"
@@ -2453,6 +2489,7 @@ static const void *const dispatch_table[256] = {
 			l_bc = m_regs.programPointer;
 			l_sp = m_regs.stackPointer;
 			l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 			// If status isn't active anymore then we must stop
 			if( m_status != asEXECUTION_ACTIVE )
@@ -2483,6 +2520,7 @@ static const void *const dispatch_table[256] = {
 
 			// Pop arguments from stack
 			l_sp += w;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 		}
 		NEXT_INSTRUCTION();
 
@@ -3023,7 +3061,62 @@ static const void *const dispatch_table[256] = {
 			m_regs.stackPointer      = l_sp;
 			m_regs.stackFramePointer = l_fp;
 
-			l_sp += CallSystemFunction(i, this);
+			// Starsector 定制：ARM64 的数组长度和标量 Math 调用有大量通用 ABI 打包开销。
+			// 仿照 Thiscall1，仅对下列无引用标量签名直接调用；字节码、参数地址、
+			// 初始化回调、异常与挂起处理保持原有 CALLSYS 契约，其余签名仍用通用分派。
+#if defined(AS_ARM64) && !defined(AS_BIG_ENDIAN) && !defined(AS_MAX_PORTABILITY)
+			asCScriptFunction *descr = m_engine->scriptFunctions[i];
+			asSSystemFunctionInterface *sysFunc = descr->sysFuncIntf;
+			const asSSystemFunctionInterface::EScalarCall scalarCall = sysFunc->scalarCall;
+			if( scalarCall != asSSystemFunctionInterface::SC_NONE && !descr->initializationCallback )
+			{
+				const bool isMethod = scalarCall == asSSystemFunctionInterface::SC_UINT_METHOD ||
+					scalarCall == asSSystemFunctionInterface::SC_UINT_METHOD_DIRECT;
+				void *obj = isMethod ? *(void**)l_sp : 0;
+				if( isMethod && obj == 0 )
+					SetInternalException(TXT_NULL_POINTER_ACCESS);
+				else
+				{
+					m_regs.objectType = 0;
+					m_callingSystemFunction = descr;
+					asDWORD result = 0;
+#ifndef AS_NO_EXCEPTIONS
+					try
+#endif
+					{
+						if( scalarCall == asSSystemFunctionInterface::SC_UINT_METHOD_DIRECT )
+						{
+							asUINT (*func)(void*) = (asUINT (*)(void*))sysFunc->func;
+							result = func(obj);
+						}
+						else if( scalarCall == asSSystemFunctionInterface::SC_UINT_METHOD )
+							result = asDWORD(m_engine->CallObjectMethodRetInt(obj, i));
+						else if( scalarCall == asSSystemFunctionInterface::SC_FLOAT_FUNCTION_ONE )
+						{
+							float (*func)(float) = (float (*)(float))sysFunc->func;
+							const float value = func(*(float*)l_sp);
+							memcpy(&result, &value, sizeof(result));
+						}
+						else
+						{
+							int (*func)(int, int) = (int (*)(int, int))sysFunc->func;
+							result = asDWORD(func(*(int*)l_sp, *(int*)(l_sp + 1)));
+						}
+					}
+#ifndef AS_NO_EXCEPTIONS
+					catch(...)
+					{
+						HandleAppException();
+					}
+#endif
+					m_callingSystemFunction = 0;
+					*(asDWORD*)&m_regs.valueRegister = result;
+					l_sp += isMethod ? AS_PTR_SIZE : scalarCall == asSSystemFunctionInterface::SC_FLOAT_FUNCTION_ONE ? 1 : 2;
+				}
+			}
+			else
+#endif
+				l_sp += CallSystemFunction(i, this);
 
 			// Update the program position after the call so that line number is correct
 			l_bc += 2;
@@ -3107,6 +3200,7 @@ static const void *const dispatch_table[256] = {
 			l_bc = m_regs.programPointer;
 			l_sp = m_regs.stackPointer;
 			l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 			// If status isn't active anymore then we must stop
 			if( m_status != asEXECUTION_ACTIVE )
@@ -3179,6 +3273,7 @@ static const void *const dispatch_table[256] = {
 				l_bc = m_regs.programPointer;
 				l_sp = m_regs.stackPointer;
 				l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 				// If status isn't active anymore then we must stop
 				if( m_status != asEXECUTION_ACTIVE )
@@ -3892,6 +3987,7 @@ static const void *const dispatch_table[256] = {
 			l_bc = m_regs.programPointer;
 			l_sp = m_regs.stackPointer;
 			l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 			// If status isn't active anymore then we must stop
 			if( m_status != asEXECUTION_ACTIVE )
@@ -4270,6 +4366,7 @@ static const void *const dispatch_table[256] = {
 					l_bc = m_regs.programPointer;
 					l_sp = m_regs.stackPointer;
 					l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 					// If status isn't active anymore then we must stop
 					if( m_status != asEXECUTION_ACTIVE )
@@ -4371,6 +4468,7 @@ static const void *const dispatch_table[256] = {
 			l_bc = m_regs.programPointer;
 			l_sp = m_regs.stackPointer;
 			l_fp = m_regs.stackFramePointer;
+			if(m_status==asEXECUTION_ACTIVE && m_currentFunction->scriptData->nativeMachineFunction && TryNativeInstructionBody(this,l_bc,l_sp,l_fp))return;
 
 			// If status isn't active anymore then we must stop
 			if( m_status != asEXECUTION_ACTIVE )
@@ -4820,15 +4918,25 @@ static const void *const dispatch_table[256] = {
 				// Call the method
 				m_callingSystemFunction = m_engine->scriptFunctions[i];
 				void *ptr = 0;
-#ifdef AS_NO_EXCEPTIONS
-				ptr = m_engine->CallObjectMethodRetPtr(obj, arg, m_callingSystemFunction);
-#else
+#ifndef AS_NO_EXCEPTIONS
 				// This try/catch block is to catch potential exception that may
 				// be thrown by the registered function.
 				try
+#endif
 				{
-					ptr = m_engine->CallObjectMethodRetPtr(obj, arg, m_callingSystemFunction);
+#if defined(AS_ARM64) && !defined(AS_BIG_ENDIAN) && !defined(AS_MAX_PORTABILITY)
+					// Starsector：与原生 ARM64 打包器相同的 x0=this、w1=整数、x0=引用返回。
+					// 已在准备阶段排除虚调用、this 偏移、复合对象和引用实参。
+					if( m_callingSystemFunction->sysFuncIntf->directPointerMethod )
+					{
+						void *(*func)(void*, int) = (void *(*)(void*, int))m_callingSystemFunction->sysFuncIntf->func;
+						ptr = func(obj, arg);
+					}
+					else
+#endif
+						ptr = m_engine->CallObjectMethodRetPtr(obj, arg, m_callingSystemFunction);
 				}
+#ifndef AS_NO_EXCEPTIONS
 				catch (...)
 				{
 					// Convert the exception to a script exception so the VM can

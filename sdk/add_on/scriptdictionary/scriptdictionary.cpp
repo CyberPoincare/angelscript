@@ -654,8 +654,10 @@ CScriptDictValue::CScriptDictValue(CScriptDictValue &&other) noexcept
 		m_valueInt = other.m_valueInt;
 	m_engine         = other.m_engine;
 	m_typeId         = other.m_typeId;
+	m_borrowedObjectHandle = other.m_borrowedObjectHandle;
 	other.m_valueObj = 0;
 	other.m_typeId   = 0;
+	other.m_borrowedObjectHandle = false;
 }
 #endif
 
@@ -701,8 +703,10 @@ CScriptDictValue &CScriptDictValue::operator=(CScriptDictValue &&other) noexcept
 		m_valueInt = other.m_valueInt;
 	m_engine         = other.m_engine;
 	m_typeId         = other.m_typeId;
+	m_borrowedObjectHandle = other.m_borrowedObjectHandle;
 	other.m_valueObj = 0;
 	other.m_typeId   = 0;
+	other.m_borrowedObjectHandle = false;
 	return *this;
 }
 #endif
@@ -714,14 +718,24 @@ void CScriptDictValue::FreeValue()
 	if( m_typeId & asTYPEID_MASK_OBJECT )
 	{
 		// Let the engine release the object
-		m_engine->ReleaseScriptObject(m_valueObj, m_engine->GetTypeInfoById(m_typeId));
+		if( !m_borrowedObjectHandle )
+			m_engine->ReleaseScriptObject(m_valueObj, m_engine->GetTypeInfoById(m_typeId));
 		m_valueObj = 0;
 		m_typeId = 0;
 	}
 
+	m_borrowedObjectHandle = false;
+
 	// For primitives, there's nothing to do
 }
 
+
+void CScriptDictValue::DetachObjectHandleOwnership()
+{
+	assert((m_typeId & asTYPEID_OBJHANDLE) != 0);
+	assert(!m_borrowedObjectHandle);
+	m_borrowedObjectHandle = true;
+}
 
 void CScriptDictValue::ReleaseReferences(asIScriptEngine*)
 {

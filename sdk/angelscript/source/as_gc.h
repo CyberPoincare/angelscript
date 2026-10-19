@@ -114,6 +114,7 @@ protected:
 	void           RemoveNewObjectAtIdx(int idx);
 	void           RemoveOldObjectAtIdx(int idx);
 	void           RemoveObjectAliases(void *object);
+	void           RemoveObjectAlias(void *alias);
 	void           MoveObjectToOldList(int idx);
 	void           MoveAllObjectsToOldList();
 
@@ -129,6 +130,8 @@ protected:
 	asCMap<void*, asSIntTypePair>      gcMap;
 	// 仅转换接口地址，不持有对象；实际节点退出共享 GC 图时删除所有对应别名。
 	std::unordered_map<void*, void*>   objectAliases;
+	// 反向索引也只保存地址；回收节点时只处理该节点的接口别名。
+	std::unordered_multimap<void*, void*> aliasesByObject;
 
 	// State variables
 	egcDestroyState                    destroyNewState;

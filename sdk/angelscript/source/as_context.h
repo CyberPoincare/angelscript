@@ -71,6 +71,7 @@ public:
 	int             PushState();
 	int             PopState();
 	bool            IsNested(asUINT *nestCount = 0) const;
+	bool            CanReuseForPool() const;
 
 	// Object pointer for calling class methods
 	int SetObject(void *obj);

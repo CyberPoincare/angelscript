@@ -22,9 +22,16 @@
 #define AS_USE_ACCESSORS 0
 #endif
 
+#include <atomic>
+
 BEGIN_AS_NAMESPACE
 
-struct SArrayBuffer;
+struct SArrayBuffer
+{
+	asDWORD maxElements;
+	asDWORD numElements;
+	asBYTE  data[1];
+};
 struct SArrayCache;
 
 class CScriptArray
@@ -139,8 +146,70 @@ protected:
 	bool  Equals(const void *a, const void *b, asIScriptContext *ctx, SArrayCache *cache) const;
 
 private:
+	void DestroyOnLastRelease() const;
 	struct customLess;
 };
+
+// 与 SDK as_atomic.cpp 的 macOS 分支相同；实际计数和内存顺序不变。
+inline int scriptArrayAtomicInc(int& value) {
+#if !defined(AS_NO_THREADS) && !defined(AS_NO_ATOMIC) && (defined(__APPLE__))
+ return std::atomic_fetch_add((std::atomic<int>*)&value,1)+1;
+#else
+ return asAtomicInc(value);
+#endif
+}
+inline int scriptArrayAtomicDec(int& value) {
+#if !defined(AS_NO_THREADS) && !defined(AS_NO_ATOMIC) && (defined(__APPLE__))
+ return std::atomic_fetch_sub((std::atomic<int>*)&value,1)-1;
+#else
+ return asAtomicDec(value);
+#endif
+}
+inline asUINT CScriptArray::GetSize() const
+{
+	return buffer->numElements;
+}
+
+inline const void *CScriptArray::At(asUINT index) const
+{
+	if( buffer == 0 || index >= buffer->numElements )
+	{
+		// If this is called from a script we raise a script exception
+		asIScriptContext *ctx = asGetActiveContext();
+		if( ctx )
+			ctx->SetException("Index out of bounds");
+		return 0;
+	}
+
+	if( (subTypeId & asTYPEID_MASK_OBJECT) && !(subTypeId & asTYPEID_OBJHANDLE) )
+		return *(void**)(buffer->data + elementSize*index);
+	else
+		return buffer->data + elementSize*index;
+}
+
+inline void *CScriptArray::At(asUINT index)
+{
+	return const_cast<void*>(const_cast<const CScriptArray *>(this)->At(index));
+}
+
+inline void CScriptArray::AddRef() const
+{
+	// Clear the GC flag then increase the counter
+	gcFlag = false;
+	scriptArrayAtomicInc(refCount);
+}
+
+inline void CScriptArray::Release() const
+{
+	// Clearing the GC flag then descrease the counter
+	gcFlag = false;
+	if( scriptArrayAtomicDec(refCount) == 0 )
+	{
+		// When reaching 0 no more references to this instance
+		// exists and the object should be destroyed
+		DestroyOnLastRelease();
+	}
+}
 
 void RegisterScriptArray(asIScriptEngine *engine, bool defaultArray);
 

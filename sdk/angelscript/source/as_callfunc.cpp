@@ -180,6 +180,8 @@ int DetectCallingConvention(bool isMethod, const asSFuncPtr &ptr, int callConv, 
 int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInterface *internal, asCScriptEngine *engine)
 {
 	asASSERT(internal->callConv == ICC_GENERIC_METHOD || internal->callConv == ICC_GENERIC_FUNC);
+	internal->scalarCall = asSSystemFunctionInterface::SC_NONE;
+	internal->directPointerMethod = false;
 
 	// Calculate the size needed for the parameters
 	internal->paramSize = func->GetSpaceNeededForArguments();
@@ -254,6 +256,9 @@ int PrepareSystemFunctionGeneric(asCScriptFunction *func, asSSystemFunctionInter
 // This function should prepare system functions so that it will be faster to call them
 int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *internal, asCScriptEngine *engine)
 {
+	internal->scalarCall = asSSystemFunctionInterface::SC_NONE;
+	internal->directPointerMethod = false;
+	internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_NONE;
 #ifdef AS_MAX_PORTABILITY
 	UNUSED_VAR(func);
 	UNUSED_VAR(internal);
@@ -552,6 +557,71 @@ int PrepareSystemFunction(asCScriptFunction *func, asSSystemFunctionInterface *i
 		else
 			offset += dt.GetSizeOnStackDWords();
 	}
+#if defined(AS_ARM64) && !defined(AS_BIG_ENDIAN)
+	// Starsector：签名与 this 调整在注册后固定，避免每次 CALLSYS 重复检查类型。
+	// 仅使用 ARM64 的指针/32 位整数寄存器契约；复杂对象、引用实参和其他 ABI
+	// 保留通用路径。初始化回调仍由执行时检查，不能缓存其可变状态。
+	if( !func->IsVariadic() && internal->auxiliary == 0 && internal->cleanArgs.GetLength() == 0 )
+	{
+		const bool directMethod = internal->callConv == ICC_THISCALL && internal->baseOffset == 0 &&
+			internal->compositeOffset == 0 && !internal->isCompositeIndirect;
+		if( !func->returnType.IsReference() && func->returnType.GetTokenType() == ttUInt &&
+			func->parameterTypes.GetLength() == 0 &&
+			(internal->callConv == ICC_THISCALL || internal->callConv == ICC_VIRTUAL_THISCALL) )
+			internal->scalarCall = directMethod ? asSSystemFunctionInterface::SC_UINT_METHOD_DIRECT :
+				asSSystemFunctionInterface::SC_UINT_METHOD;
+		else if( !func->returnType.IsReference() && func->returnType.GetTokenType() == ttInt &&
+			internal->callConv == ICC_CDECL && func->parameterTypes.GetLength() == 2 &&
+			!func->parameterTypes[0].IsReference() && func->parameterTypes[0].GetTokenType() == ttInt &&
+			!func->parameterTypes[1].IsReference() && func->parameterTypes[1].GetTokenType() == ttInt )
+			internal->scalarCall = asSSystemFunctionInterface::SC_INT_FUNCTION_TWO;
+		else if( !func->returnType.IsReference() && func->returnType.GetTokenType() == ttFloat &&
+			internal->callConv == ICC_CDECL && func->parameterTypes.GetLength() == 1 &&
+			!func->parameterTypes[0].IsReference() && func->parameterTypes[0].GetTokenType() == ttFloat )
+			internal->scalarCall = asSSystemFunctionInterface::SC_FLOAT_FUNCTION_ONE;
+
+		internal->directPointerMethod = directMethod && func->returnType.IsReference() &&
+			func->parameterTypes.GetLength() == 1 && !func->parameterTypes[0].IsReference() &&
+			(func->parameterTypes[0].GetTokenType() == ttInt || func->parameterTypes[0].GetTokenType() == ttUInt);
+	}
+	// 此入口在 CallSystemFunction 已完成 this/组合/多继承调整之后调用。虚方法仍在
+	// 原生入口取实际 vtable；返回的 @/@+、载体解析、初始化回调和异常清理由公共代码执行。
+	// 无需把固定的单个 x0/s0/d0 签名重新装进通用 GP/FP/栈参数数组。
+	// Starsector 定制：CDECL 的五个 float 参数仍由公共调用者处理初始化、异常与返回值；
+	// 这里只省去固定 s0--s4 的通用参数数组打包。
+	if( internal->callConv == ICC_CDECL && !internal->hostReturnInMemory &&
+	    !func->IsVariadic() && !func->returnType.IsReference() &&
+	    func->returnType.GetTokenType() == ttFloat && func->parameterTypes.GetLength() == 5 )
+	{
+		bool fiveFloats = true;
+		for( asUINT i=0;i<5;i++ )
+			fiveFloats = fiveFloats && !func->parameterTypes[i].IsReference() &&
+			             func->parameterTypes[i].GetTokenType() == ttFloat;
+		if( fiveFloats ) internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_FLOAT_FUNCTION_FIVE;
+	}
+	const bool simpleObjectCall = internal->callConv == ICC_THISCALL ||
+		internal->callConv == ICC_VIRTUAL_THISCALL || internal->callConv == ICC_CDECL_OBJFIRST ||
+		internal->callConv == ICC_CDECL_OBJLAST;
+	if( simpleObjectCall && !internal->hostReturnInMemory && !func->IsVariadic() )
+	{
+		if( func->parameterTypes.GetLength() == 0 )
+		{
+			if( func->returnType.IsReference() || func->returnType.IsObjectHandle() )
+				internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_POINTER;
+			else if( func->returnType.GetTokenType() == ttUInt || func->returnType.GetTokenType() == ttInt )
+				internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_UINT;
+			else if( func->returnType.GetTokenType() == ttBool )
+				internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_BOOL;
+			else if( func->returnType.GetTokenType() == ttFloat )
+				internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_FLOAT;
+			else if( func->returnType.GetTokenType() == ttDouble )
+				internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_DOUBLE;
+		}
+		else if( func->parameterTypes.GetLength() == 1 && func->returnType.GetTokenType() == ttVoid &&
+			!func->parameterTypes[0].IsReference() && func->parameterTypes[0].GetTokenType() == ttFloat )
+			internal->nativeSimpleCall = asSSystemFunctionInterface::NSC_VOID_FLOAT;
+	}
+#endif
 #endif // !defined(AS_MAX_PORTABILITY)
 	return 0;
 }

@@ -1659,7 +1659,8 @@ void asCScriptFunction::JITCompile()
 	// Make sure the function has been compiled with JitEntry instructions
 	// For functions that has JitEntry this will be a quick test
 	asUINT length;
-	asDWORD *byteCode = GetByteCode(&length);
+	length = asUINT(scriptData->byteCode.GetLength());
+	asDWORD *byteCode = scriptData->byteCode.AddressOf();
 	asDWORD *end = byteCode + length;
 	bool foundJitEntry = false;
 	while( byteCode < end )
@@ -1709,10 +1710,34 @@ void asCScriptFunction::JITCompile()
 	}
 }
 
+// Starsector 定制：不经过可写接口的只读检查和预发布绑定，不改变标准 JIT 接口。
+AS_API const asDWORD *asGetReadOnlyByteCode(const asIScriptFunction *function, asUINT *length)
+{
+	const asCScriptFunction *script = static_cast<const asCScriptFunction*>(function);
+	if( length ) *length = script && script->scriptData ? asUINT(script->scriptData->byteCode.GetLength()) : 0;
+	return script && script->scriptData ? script->scriptData->byteCode.AddressOf() : 0;
+}
+
+AS_API int asBindNativeByteCode(asIScriptFunction *function, asJITFunction body,
+                              const asBYTE *entries, asUINT length)
+{
+	asCScriptFunction *script = static_cast<asCScriptFunction*>(function);
+	if( !script || !script->scriptData || !body || !entries ||
+	    length != script->scriptData->byteCode.GetLength() ||
+	    script->scriptData->nativeByteCodeExposed.load(std::memory_order_acquire) )
+		return asINVALID_ARG;
+	auto &data = *script->scriptData;
+	data.nativeEntries.SetLength(length);
+	memcpy(data.nativeEntries.AddressOf(), entries, length);
+	data.nativeMachineFunction = body;
+	return asSUCCESS;
+}
+
 // interface
 asDWORD *asCScriptFunction::GetByteCode(asUINT *length)
 {
 	if( scriptData == 0 ) return 0;
+	scriptData->nativeByteCodeExposed.store(true, std::memory_order_release);
 
 	if( length )
 		*length = (asUINT)scriptData->byteCode.GetLength();

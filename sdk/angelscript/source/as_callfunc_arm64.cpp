@@ -163,6 +163,47 @@ asQWORD CallSystemFunctionNative(asCContext *context, asCScriptFunction *descr, 
 	asFUNCTION_t func = sysFunc->func;
 	int callConv = sysFunc->callConv;
 	asQWORD       retQW     = 0;
+	// Starsector 定制：所有 this 调整、初始化/异常边界及返回引用处理仍在公共调用者。
+	// 这里只承接注册时确认的 ARM64 寄存器签名，复杂值、混合参数和其他约定仍走下方原实现。
+	if( sysFunc->nativeSimpleCall != asSSystemFunctionInterface::NSC_NONE )
+	{
+		if( callConv == ICC_VIRTUAL_THISCALL )
+			func = (*(asFUNCTION_t**)obj)[FuncPtrToUInt(func)/sizeof(void*)];
+		switch( sysFunc->nativeSimpleCall )
+		{
+		case asSSystemFunctionInterface::NSC_UINT:
+			return ((asDWORD (*)(void*))func)(obj);
+		case asSSystemFunctionInterface::NSC_BOOL:
+			return ((bool (*)(void*))func)(obj);
+		case asSSystemFunctionInterface::NSC_FLOAT:
+		{
+			const float result = ((float (*)(void*))func)(obj);
+			memcpy(&retQW, &result, sizeof(result));
+			return retQW;
+		}
+		case asSSystemFunctionInterface::NSC_DOUBLE:
+		{
+			const double result = ((double (*)(void*))func)(obj);
+			memcpy(&retQW, &result, sizeof(result));
+			return retQW;
+		}
+		case asSSystemFunctionInterface::NSC_POINTER:
+			return asQWORD(asPWORD(((void* (*)(void*))func)(obj)));
+		case asSSystemFunctionInterface::NSC_FLOAT_FUNCTION_FIVE:
+		{
+			const float result = ((float (*)(float,float,float,float,float))func)(
+			    ((float*)args)[0],((float*)args)[1],((float*)args)[2],((float*)args)[3],((float*)args)[4]);
+			memcpy(&retQW, &result, sizeof(result));
+			return retQW;
+		}
+		case asSSystemFunctionInterface::NSC_VOID_FLOAT:
+			// ARM64 的 this/OBJFIRST/OBJLAST 此签名均把对象传 x0，float 传 s0。
+			((void (*)(void*, float))func)(obj, *(float*)args);
+			return 0;
+		default:
+			asASSERT(false);
+		}
+	}
 
 	asQWORD       gpRegArgs[GP_ARG_REGISTERS];
 	asQWORD       floatRegArgs[FLOAT_ARG_REGISTERS];

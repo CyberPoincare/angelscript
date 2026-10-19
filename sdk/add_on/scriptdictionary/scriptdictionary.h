@@ -96,6 +96,10 @@ public:
 	// Returns the type id of the stored value
 	int  GetTypeId() const;
 
+	// Starsector：Java Object 的不可变句柄载体可共享存储，但每条外部引用仍分别
+	// 持有实际对象。转交当前这一条引用后，载体只借读；普通复制仍取得独立引用。
+	void DetachObjectHandleOwnership();
+
 	// 项目定制：宿主将基本值承接为 Java 包装对象时，复制字典值仍保留同一对象身份。
 	// 此元数据不持有 AS 对象；游戏字段和装箱规则由宿主实现。
 	const std::shared_ptr<void>& GetObjectIdentity() const { return m_objectIdentity; }
@@ -119,6 +123,7 @@ protected:
 	};
 	asIScriptEngine* m_engine;
 	int m_typeId;
+	bool m_borrowedObjectHandle = false;
 	std::shared_ptr<void> m_objectIdentity;
 };
 

@@ -54,6 +54,7 @@
 #include "as_tokenizer.h"
 #include "as_map.h"
 #include <memory>
+#include <atomic>
 
 BEGIN_AS_NAMESPACE
 
@@ -442,7 +443,8 @@ public:
 
 	// Type identifiers
 	mutable int                             typeIdSeqNbr;
-	mutable asCMap<int, asCTypeInfo*>       mapTypeIdToTypeInfo;
+	// Starsector：类型序号仍由 SDK 原入口分配；稠密表只借用实际类型，不额外保活。
+	mutable asCArray<asCTypeInfo*>        typeInfoBySequence;
 
 	// Garbage collector
 	// 定制：共享 GC 不改变脚本类、函数编号或模块的所属引擎。
@@ -506,6 +508,8 @@ public:
 	// Java 共享 GC 可从另一个引擎的线程读取行为、类型或执行析构函数；
 	// 每个引擎独立保护这些操作与编译/注册，独立引擎仍可并行编译。
 	mutable std::recursive_mutex gcMetadataMutex;
+	// Starsector：函数 ID 查表的借用缓存随每次槽位变更失效；不保活函数或引擎。
+	std::atomic<asQWORD> scriptFunctionLookupEpoch;
 
 	// Engine properties
 	struct
