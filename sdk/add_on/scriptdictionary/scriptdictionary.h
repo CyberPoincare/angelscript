@@ -95,6 +95,8 @@ public:
 
 	// Returns the type id of the stored value
 	int  GetTypeId() const;
+	// Starsector：原生共享拥有者枚举值时使用它实际所属引擎的类型表。
+	asIScriptEngine *GetEngine() const { return m_engine; }
 
 	// Starsector：Java Object 的不可变句柄载体可共享存储，但每条外部引用仍分别
 	// 持有实际对象。转交当前这一条引用后，载体只借读；普通复制仍取得独立引用。

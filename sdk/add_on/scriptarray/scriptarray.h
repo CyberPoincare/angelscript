@@ -106,6 +106,8 @@ public:
 	void *GetBuffer();
 	// Java List 桥接：结构修改计数供宿主复刻 ArrayList.Itr 的 fail-fast 检查。
 	asQWORD GetModificationCount() const;
+	// Starsector：宿主为同一实际数组挂接Java对象头；不保存元素或改变数组操作。
+	void *GetHostObjectIdentity(void *(*create)(), void (*destroy)(void *)) const;
 
 	// GC methods
 	int  GetRefCount();
@@ -122,6 +124,8 @@ protected:
 	int             elementSize;
 	int             subTypeId;
 	asQWORD         modificationCount = 0;
+	mutable void *hostObjectIdentity = nullptr;
+	mutable void (*destroyHostObjectIdentity)(void *) = nullptr;
 
 	// Constructors
 	CScriptArray(asITypeInfo *ot, void *initBuf); // Called from script when initialized with list

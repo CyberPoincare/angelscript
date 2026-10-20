@@ -5,6 +5,7 @@
 #include <stdio.h> // snprintf
 #include <string>
 #include <algorithm> // std::sort
+#include <mutex>
 
 #include "scriptarray.h"
 
@@ -658,6 +659,19 @@ CScriptArray::~CScriptArray()
 		buffer = 0;
 	}
 	if( objType ) objType->Release();
+	if( hostObjectIdentity ) destroyHostObjectIdentity(hostObjectIdentity);
+}
+
+void *CScriptArray::GetHostObjectIdentity(void *(*create)(), void (*destroy)(void *)) const
+{
+	static std::mutex identityMutex;
+	const std::lock_guard<std::mutex> lock(identityMutex);
+	if( !hostObjectIdentity )
+	{
+		hostObjectIdentity = create();
+		destroyHostObjectIdentity = destroy;
+	}
+	return hostObjectIdentity;
 }
 
 
