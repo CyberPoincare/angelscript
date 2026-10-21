@@ -105,7 +105,7 @@ public:
 	// 项目定制：宿主将基本值承接为 Java 包装对象时，复制字典值仍保留同一对象身份。
 	// 此元数据不持有 AS 对象；游戏字段和装箱规则由宿主实现。
 	const std::shared_ptr<void>& GetObjectIdentity() const { return m_objectIdentity; }
-	void SetObjectIdentity(std::shared_ptr<void> identity) { m_objectIdentity = std::move(identity); }
+	void SetObjectIdentity(std::shared_ptr<void> identity) const { m_objectIdentity = std::move(identity); }
 
 	// Free the stored value
 	void FreeValue();
@@ -126,7 +126,7 @@ protected:
 	asIScriptEngine* m_engine;
 	int m_typeId;
 	bool m_borrowedObjectHandle = false;
-	std::shared_ptr<void> m_objectIdentity;
+	mutable std::shared_ptr<void> m_objectIdentity;
 };
 
 class CScriptDictionary
@@ -274,15 +274,17 @@ protected:
 
 // This function will determine the configuration of the engine
 // and use one of the two functions below to register the dictionary object
-void RegisterScriptDictionary(asIScriptEngine *engine);
+// Starsector：Java Object 宿主可自行注册赋值，保持装箱类型和引用身份。
+// 默认仍保留 SDK 的赋值和数值提升，供普通 dictionary 用户使用。
+void RegisterScriptDictionary(asIScriptEngine *engine, bool registerValueAssignment = true);
 
 // Call this function to register the math functions
 // using native calling conventions
-void RegisterScriptDictionary_Native(asIScriptEngine *engine);
+void RegisterScriptDictionary_Native(asIScriptEngine *engine, bool registerValueAssignment = true);
 
 // Use this one instead if native calling conventions
 // are not supported on the target platform
-void RegisterScriptDictionary_Generic(asIScriptEngine *engine);
+void RegisterScriptDictionary_Generic(asIScriptEngine *engine, bool registerValueAssignment = true);
 
 END_AS_NAMESPACE
 
