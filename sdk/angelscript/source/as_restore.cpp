@@ -1534,6 +1534,21 @@ asCScriptFunction *asCReader::ReadFunction(bool &isNew, bool addToModule, bool a
 					break;
 				}
 			}
+			// Starsector Java→AS 兼容：类中的抽象声明使用接口函数描述，
+			// methods 保存虚分派入口，实际无方法体声明保存在虚函数表。
+			// 共享类由其他模块拥有时，恢复该声明必须复用同一个函数。
+			if( !found && func->funcType == asFUNC_INTERFACE && !func->objectType->IsInterface() )
+			{
+				for( asUINT n = 0; n < func->objectType->virtualFunctionTable.GetLength(); n++ )
+				{
+					realFunc = func->objectType->virtualFunctionTable[n];
+					if( realFunc && realFunc->funcType == func->funcType && func->IsSignatureEqual(realFunc) )
+					{
+						found = true;
+						break;
+					}
+				}
+			}
 		}
 
 		if( found )
