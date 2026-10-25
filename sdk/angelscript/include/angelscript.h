@@ -784,6 +784,8 @@ public:
 	virtual void                  *CreateScriptObject(const asITypeInfo *type) = 0;
 	virtual void                  *CreateScriptObjectCopy(void *obj, const asITypeInfo *type) = 0;
 	virtual void                  *CreateUninitializedScriptObject(const asITypeInfo *type) = 0;
+	// 项目定制：Java Unsafe 分配跳过引用成员 factory，仅构造宿主值载体。
+	virtual asIScriptObject       *CreateScriptObjectWithNullReferences(const asITypeInfo *type) = 0;
 	// 项目定制：Java Object.clone 保留动态类型和字段引用，不调用脚本构造、copy factory 或 opAssign。
 	virtual asIScriptObject       *CreateShallowScriptObjectCopy(asIScriptObject *obj) = 0;
 	virtual asIScriptFunction     *CreateDelegate(asIScriptFunction *func, void *obj) = 0;

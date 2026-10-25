@@ -178,6 +178,7 @@ public:
 	virtual void                  *CreateScriptObject(const asITypeInfo *type);
 	virtual void                  *CreateScriptObjectCopy(void *obj, const asITypeInfo *type);
 	virtual void                  *CreateUninitializedScriptObject(const asITypeInfo *type);
+	virtual asIScriptObject       *CreateScriptObjectWithNullReferences(const asITypeInfo *type);
 	virtual asIScriptObject       *CreateShallowScriptObjectCopy(asIScriptObject *obj);
 	virtual asIScriptFunction     *CreateDelegate(asIScriptFunction *func, void *obj);
 	virtual int                    AssignScriptObject(void *dstObj, void *srcObj, const asITypeInfo *type);

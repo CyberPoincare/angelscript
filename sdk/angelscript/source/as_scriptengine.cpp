@@ -5861,6 +5861,28 @@ void *asCScriptEngine::CreateUninitializedScriptObject(const asITypeInfo *type)
 	return obj;
 }
 
+// 项目定制：Java Unsafe.allocateInstance 不运行构造器/字段初始化，
+// 引用槽位保持 null；string/ref/dictionaryValue 等宿主值载体仍须合法构造和析构。
+asIScriptObject *asCScriptEngine::CreateScriptObjectWithNullReferences(const asITypeInfo *type)
+{
+	if (!type || type->GetEngine() != this || !(type->GetFlags() & asOBJ_SCRIPT_OBJECT)) return 0;
+	asCObjectType *objectType = CastToObjectType(const_cast<asCTypeInfo*>(reinterpret_cast<const asCTypeInfo*>(type)));
+	if (!objectType || objectType->size == 0) return 0;
+	asCScriptObject *object = reinterpret_cast<asCScriptObject*>(CallAlloc(objectType));
+	new(object) asCScriptObject(objectType, false, false);
+	for (asUINT n = 0; n < objectType->properties.GetLength(); ++n)
+	{
+		asCObjectProperty *property = objectType->properties[n];
+		if (property->type.IsObject() && !property->type.IsObjectHandle() &&
+			!(property->type.GetTypeInfo()->flags & asOBJ_REF) && property->type.IsReference())
+		{
+			void **slot = reinterpret_cast<void**>(reinterpret_cast<char*>(object) + property->byteOffset);
+			*slot = object->AllocateUninitializedObject(CastToObjectType(property->type.GetTypeInfo()), this);
+		}
+	}
+	return object;
+}
+
 // 项目定制：Object.clone 由实际动态类型分配，完全跳过脚本构造与成员 factory。
 asIScriptObject *asCScriptEngine::CreateShallowScriptObjectCopy(asIScriptObject *origObj)
 {
