@@ -11860,6 +11860,12 @@ int asCCompiler::CompileVariableAccess(const asCString &name, const asCString &s
 
 				ctx->type.Set(prop->type);
 				ctx->type.isLValue = true;
+				// Starsector 定制：宿主注册的 const String 是进程期静态常量，
+				// const 引用参数直接借出原载体，避免临时值复制丢失 Java 常量池身份。
+				// 普通可变宿主属性、脚本全局和按值 String 传参继续沿原保护/复制规则。
+				if (isAppProp && prop->type.IsReadOnly() &&
+					prop->type.GetTypeInfo() == engine->stringType.GetTypeInfo())
+					ctx->type.isRefSafe = true;
 
 				if (ctx->type.dataType.IsPrimitive())
 				{
