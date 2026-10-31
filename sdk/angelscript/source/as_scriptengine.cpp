@@ -1920,6 +1920,55 @@ int asCScriptEngine::RegisterInterfaceMethod(const char *intf, const char *decla
 	return func->id;
 }
 
+// Starsector 机制兼容：RegisterInterfaceMethod 只能登记方法，不能表达 Java 的 extends。
+// 采用 CompileInterfaces 相同的父身份、继承方法和去重规则；游戏逻辑不在此转换。
+int asCScriptEngine::RegisterInterfaceBase(const char *intf, const char *base)
+{
+	const std::lock_guard<std::recursive_mutex> metadataLock(gcMetadataMutex);
+	if( !intf || !base ) return ConfigError(asINVALID_ARG, "RegisterInterfaceBase", intf, base);
+	if( !currentGroup->FindType(intf) )
+		return ConfigError(asWRONG_CONFIG_GROUP, "RegisterInterfaceBase", intf, base);
+	asCBuilder bld(this, 0);
+	asCDataType derivedType, baseType;
+	int result = bld.ParseDataType(intf, &derivedType, defaultNamespace);
+	if( result >= 0 ) result = bld.ParseDataType(base, &baseType, defaultNamespace);
+	if( result < 0 ) return ConfigError(result, "RegisterInterfaceBase", intf, base);
+	asCObjectType *derived = CastToObjectType(derivedType.GetTypeInfo());
+	asCObjectType *parent = CastToObjectType(baseType.GetTypeInfo());
+	if( !derived || !parent || !derived->IsInterface() || !parent->IsInterface() ||
+		derived == parent || parent->Implements(derived) )
+		return ConfigError(asINVALID_TYPE, "RegisterInterfaceBase", intf, base);
+	if( derived->Implements(parent) ) return asALREADY_REGISTERED;
+
+	asCArray<asCObjectType*> parents;
+	parents.PushLast(parent);
+	for( asUINT i = 0; i < parent->interfaces.GetLength(); ++i )
+		parents.PushLast(parent->interfaces[i]);
+	for( asUINT i = 0; i < parents.GetLength(); ++i )
+	{
+		asCObjectType *inherited = parents[i];
+		if( !derived->Implements(inherited) )
+		{
+			derived->interfaces.PushLast(inherited);
+			currentGroup->AddReferencesForType(this, inherited);
+		}
+		for( asUINT m = 0; m < inherited->methods.GetLength(); ++m )
+		{
+			asCScriptFunction *baseFunc = scriptFunctions[inherited->methods[m]];
+			bool found = false;
+			for( asUINT d = 0; d < derived->methods.GetLength(); ++d )
+				if( scriptFunctions[derived->methods[d]]->IsSignatureEqual(baseFunc) )
+				{ found = true; break; }
+			if( !found )
+			{
+				derived->methods.PushLast(baseFunc->id);
+				baseFunc->AddRefInternal();
+			}
+		}
+	}
+	return asSUCCESS;
+}
+
 asCTypeInfo* asCScriptEngine::GetTemplateSubTypeByName(const asCString &name)
 {
 	asCTypeInfo* subtype = 0;
